@@ -142,3 +142,12 @@ def test_nothing_ticked_and_replace_means_remove():
     rec = recommend(1, [mk(i) for i in range(10)], NVIDIA, TOOLS, GameSettings("-x"), 1_800_000_000, lambda n: None)
     assert rec.launch_options("-x", components=[], replace=True) is None
     assert rec.launch_options("-x", components=[]) == "-x"
+
+
+def test_percent_never_rounds_up_past_the_tick_threshold():
+    from autoproton.recommend.engine import OptionSuggestion
+    from autoproton.recommend.launchopts import Component
+
+    o = OptionSuggestion(Component("arg", "--intro-skip"), "arg", 0.1493, 222, 0, False, True, False, "")
+    assert o.percent == "14%"
+    assert OptionSuggestion(Component("arg", "-x"), "arg", 0.15, 3, 0, True, True, False, "").percent == "15%"

@@ -144,7 +144,7 @@ class App:
                 continue
             mark = "[x]" if o.default_on else ("[-]" if not o.available or o.hidden else "[ ]")
             self.say(f"    {mark} {o.component.text:40} {knowledge.CATEGORY_LABELS[o.category]:22} "
-                     f"{o.share:4.0%} of reports ({o.count}){'  — ' + o.reason if o.reason else ''}")
+                     f"{o.percent:>4} of reports ({o.count}){'  — ' + o.reason if o.reason else ''}")
         self.say(f"  Result: {rec.launch_options(a.current.launch_options) or '(none)'}")
 
     def cmd_apply(self):

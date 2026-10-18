@@ -127,6 +127,11 @@ class OptionSuggestion:
     def description(self) -> str:
         return knowledge.describe(self.component.key)
 
+    @property
+    def percent(self) -> str:
+        """The share as a whole percentage, rounded down so it never looks over the tick threshold."""
+        return f"{math.floor(self.share * 100 + 1e-9)}%"
+
 
 @dataclass
 class Recommendation:

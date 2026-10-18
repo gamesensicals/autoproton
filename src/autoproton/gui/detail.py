@@ -333,7 +333,7 @@ class DetailPanel(QStackedWidget):
             item.setToolTip(tip)
             self.opts_table.setItem(row, 0, item)
             self.opts_table.setItem(row, 1, self._ro(knowledge.CATEGORY_LABELS.get(o.category, o.category)))
-            self.opts_table.setItem(row, 2, self._ro(f"{o.share:.0%} ({o.count})"))
+            self.opts_table.setItem(row, 2, self._ro(f"{o.percent} ({o.count})"))
             why = o.reason or o.description or ("Commonly used by working reports." if o.default_on else "")
             self.opts_table.setItem(row, 3, self._ro(why))
             if not o.available or o.hidden:
