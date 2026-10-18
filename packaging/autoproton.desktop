@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=autoproton
+GenericName=Proton settings from ProtonDB
+Comment=Pick the best Proton version and launch options for your Steam games from ProtonDB reports
+Exec=autoproton
+Icon=autoproton
+Categories=Game;
+Keywords=steam;proton;protondb;wine;launch options;
+Terminal=false
+StartupWMClass=autoproton

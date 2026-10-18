@@ -52,6 +52,8 @@ def clean_env(env: Mapping[str, str]) -> dict[str, str]:
             out.pop(var, None)
     for var in _DROP:
         out.pop(var, None)
+    for var in [k for k in out if k.startswith(("_PYI_", "_MEIPASS"))]:
+        out.pop(var)
     return out
 
 
@@ -69,9 +71,19 @@ def steam_pids(ctx: AppContext) -> list[int]:
             comm = (proc / entry / "comm").read_text(errors="replace").strip()
         except OSError:
             continue
-        if comm in STEAM_PROCESS_NAMES:
+        if comm in STEAM_PROCESS_NAMES and not _is_zombie(proc / entry):
             pids.append(int(entry))
     return sorted(pids)
+
+
+def _is_zombie(proc_dir) -> bool:
+    """A process that has exited but not been collected yet (e.g. a finished `steam -shutdown`)."""
+    try:
+        stat = (proc_dir / "stat").read_text(errors="replace")
+    except OSError:
+        return False
+    # format: pid (comm) state ...; comm may contain spaces or parentheses
+    return stat.rpartition(")")[2].split()[:1] == ["Z"]
 
 
 def is_running(ctx: AppContext) -> bool:

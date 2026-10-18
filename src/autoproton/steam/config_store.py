@@ -46,6 +46,12 @@ def read_settings(localconfig: bytes, config: bytes, appid: int) -> GameSettings
     )
 
 
+def read_all_settings(localconfig: bytes, config: bytes, appids) -> dict[int, GameSettings]:
+    """Settings for many games from a single parse of each file."""
+    local_doc, cfg_doc = VdfDocument.from_bytes(localconfig), VdfDocument.from_bytes(config)
+    return {a: GameSettings(read_launch_options(local_doc, a), read_compat(cfg_doc, a)) for a in appids}
+
+
 def validate_launch_options(value: str) -> None:
     bad = sorted({repr(c) for c in value if c in _CONTROL})
     if bad:
@@ -73,20 +79,26 @@ def edit_compat(doc: VdfDocument, appid: int, value: CompatSetting | None) -> No
 
 
 def build_changes(
-    localconfig: bytes, config: bytes, appid: int, after: GameSettings
+    localconfig: bytes, config: bytes, appid: int, after: GameSettings, current: GameSettings | None = None
 ) -> tuple[bytes | None, bytes | None]:
     """New file contents that give ``appid`` the settings in ``after``.
 
-    Returns None for a file that doesn't need to change.
+    Returns None for a file that doesn't need to change. Each edited file is
+    re-parsed and checked to hold exactly the new value before it's returned.
     """
-    current = read_settings(localconfig, config, appid)
+    if current is None:
+        current = read_settings(localconfig, config, appid)
     new_local = new_config = None
     if current.launch_options != after.launch_options:
         doc = VdfDocument.from_bytes(localconfig)
         edit_launch_options(doc, appid, after.launch_options)
+        if read_launch_options(doc, appid) != after.launch_options:
+            raise InvalidSetting("the edited localconfig.vdf didn't read back as intended")
         new_local = doc.to_bytes()
     if current.compat_tool != after.compat_tool:
         doc = VdfDocument.from_bytes(config)
         edit_compat(doc, appid, after.compat_tool)
+        if read_compat(doc, appid) != after.compat_tool:
+            raise InvalidSetting("the edited config.vdf didn't read back as intended")
         new_config = doc.to_bytes()
     return new_local, new_config
