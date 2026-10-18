@@ -1,4 +1,5 @@
 import os
+import sys
 
 import pytest
 import vdf as vdf_oracle
@@ -242,3 +243,25 @@ def test_hardware_override(ctx):
     _sys(ctx, ["0x1002"])
     ctx.env = {**ctx.env, "AUTOPROTON_DEVICE": "deck"}
     assert hardware.detect(ctx).is_deck
+
+
+def test_clean_env_strips_bundle_paths_when_run_unpacked(monkeypatch):
+    # an unpacked AppImage: no APPIMAGE variable, but we're frozen with libraries in _MEIPASS
+    monkeypatch.setattr(sys, "_MEIPASS", "/tmp/_MEIabc", raising=False)
+    env = process.clean_env({"LD_LIBRARY_PATH": "/tmp/_MEIabc:/tmp/_MEIabc/lib:/opt/user/lib", "HOME": "/h"})
+    assert env == {"LD_LIBRARY_PATH": "/opt/user/lib", "HOME": "/h"}
+    env = process.clean_env({"LD_LIBRARY_PATH": "/tmp/_MEIabc", "HOME": "/h"})
+    assert env == {"HOME": "/h"}
+
+
+def test_clean_env_strips_appdir_paths(monkeypatch):
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    env = process.clean_env({"APPDIR": "/tmp/.mount_x", "LD_LIBRARY_PATH": "/tmp/.mount_x/usr/lib:/opt/x"})
+    assert env == {"LD_LIBRARY_PATH": "/opt/x"}
+
+
+def test_other_users_steam_is_not_counted(ctx):
+    d = make_proc(ctx.sys_root, 6000, "steam")
+    assert process.is_running(ctx)
+    ctx.own_uid = os.stat(d).st_uid + 1
+    assert not process.is_running(ctx)

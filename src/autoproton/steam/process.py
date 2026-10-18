@@ -8,6 +8,7 @@ Steam is fully closed.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from collections.abc import Mapping
 
@@ -41,15 +42,33 @@ _DROP = (
 )
 
 
+def _bundle_dirs(env: Mapping[str, str]) -> list[str]:
+    """Folders that hold our own bundled libraries, when running frozen or from an AppImage."""
+    dirs = [getattr(sys, "_MEIPASS", None), env.get("APPDIR"), env.get("_PYI_APPLICATION_HOME_DIR")]
+    return [os.path.realpath(d) for d in dirs if d]
+
+
+def _inside(path: str, dirs: list[str]) -> bool:
+    real = os.path.realpath(path)
+    return any(real == d or real.startswith(d.rstrip("/") + "/") for d in dirs)
+
+
 def clean_env(env: Mapping[str, str]) -> dict[str, str]:
     """The environment to hand to other programs, without our bundle's variables."""
     out = dict(env)
+    dirs = _bundle_dirs(env)
+    bundled = bool(dirs) or any(env.get(v) for v in ("_PYI_APPLICATION_HOME_DIR", "APPIMAGE", "_MEIPASS2"))
     for var in _RESTORE:
         orig = out.pop(var + "_ORIG", None)
         if orig is not None:
             out[var] = orig
-        elif out.get("_PYI_APPLICATION_HOME_DIR") or out.get("APPIMAGE") or out.get("_MEIPASS2"):
-            out.pop(var, None)
+        elif var in out and bundled:
+            # keep the user's own entries, drop the ones pointing into our bundle
+            kept = [p for p in out[var].split(":") if p and dirs and not _inside(p, dirs)]
+            if kept:
+                out[var] = ":".join(kept)
+            else:
+                out.pop(var)
     for var in _DROP:
         out.pop(var, None)
     for var in [k for k in out if k.startswith(("_PYI_", "_MEIPASS"))]:
@@ -71,8 +90,14 @@ def steam_pids(ctx: AppContext) -> list[int]:
             comm = (proc / entry / "comm").read_text(errors="replace").strip()
         except OSError:
             continue
-        if comm in STEAM_PROCESS_NAMES and not _is_zombie(proc / entry):
-            pids.append(int(entry))
+        if comm not in STEAM_PROCESS_NAMES or _is_zombie(proc / entry):
+            continue
+        try:
+            if (proc / entry).stat().st_uid != ctx.own_uid:
+                continue  # another user's Steam doesn't write to our files
+        except OSError:
+            continue
+        pids.append(int(entry))
     return sorted(pids)
 
 

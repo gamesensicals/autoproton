@@ -114,3 +114,38 @@ def test_rate_limit_message():
     net = FakeNet({ge_proton.LATEST_URL: (403, {})})
     with pytest.raises(ge_proton.GEError, match="limiting"):
         ge_proton.latest_release(net)
+
+
+def test_broken_leftover_folder_is_moved_aside(tmp_path):
+    compat = tmp_path / "compatibilitytools.d"
+    (compat / TAG / "files").mkdir(parents=True)  # half-copied by hand, no compatibilitytool.vdf
+    data = build_tar()
+    net = net_for(data)
+    tool = ge_proton.install(net, ge_proton.latest_release(net), compat)
+    assert tool.internal_name == TAG
+    assert (compat / TAG / "compatibilitytool.vdf").is_file()
+    assert (compat / f".autoproton-broken-{TAG}-1" / "files").is_dir()  # kept, not deleted
+
+
+def test_download_that_stops_part_way_is_a_clear_error(monkeypatch):
+    import io
+
+    from autoproton.net import Net, NetError
+
+    class Resp:
+        headers = {"Content-Length": "100"}
+
+        def read(self, n):
+            raise TimeoutError("timed out")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    n = Net(env={})
+    monkeypatch.setattr(n, "_open", lambda url, headers: Resp())
+    monkeypatch.setattr(n, "_pace", lambda url: None)
+    with pytest.raises(NetError, match="stopped part-way"):
+        n.download("https://example.invalid/x", io.BytesIO())

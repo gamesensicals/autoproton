@@ -100,10 +100,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
         with:
           name: autoproton-AppImage
+      - name: Release notes
+        run: |
+          notes="docs/releases/${GITHUB_REF_NAME}.md"
+          if [ ! -f "$notes" ]; then
+            mkdir -p docs/releases
+            printf 'autoproton %s. See the README for how to download and run it.\n' "$GITHUB_REF_NAME" > "$notes"
+          fi
+          echo "NOTES=$notes" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
         with:
           files: "*.AppImage"
-          generate_release_notes: true
+          body_path: ${{ env.NOTES }}
+          fail_on_unmatched_files: true

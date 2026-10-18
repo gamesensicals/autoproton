@@ -49,6 +49,7 @@ class AppContext:
     steam_root_override: Path | None = None
     net: object | None = field(default=None, repr=False)
     own_pid: int = field(default_factory=os.getpid)
+    own_uid: int = field(default_factory=os.getuid)
 
     @classmethod
     def default(cls, env: Mapping[str, str] | None = None) -> AppContext:

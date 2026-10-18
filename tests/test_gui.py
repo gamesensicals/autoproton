@@ -302,3 +302,19 @@ def test_cancelling_ge_download_is_not_an_error(qtbot, window, gui_core):
     dlg._fail(Cancelled())
     assert dlg.pages.currentIndex() == 3
     assert "Nothing was changed" in dlg.end_box.itemAt(0).widget().text()
+
+
+def test_backups_tab_keeps_the_picked_backup_after_a_restore(qtbot, window, gui_core, steam, auto_exec):
+    original = steam.localconfig.read_bytes()
+    window.select_appid(1091500)
+    window.detail.apply_btn.click()
+    window.select_appid(570)
+    window.detail.apply_btn.click()
+    dlg = HistoryDialog(window, gui_core, window.runner, window.install, window.account)
+    qtbot.addWidget(dlg)
+    first = next(b for b in dlg.backups if b.game == "Cyberpunk 2077")
+    dlg.btable.selectRow(dlg.backups.index(first))
+    dlg.file_combo.setCurrentIndex(dlg.file_combo.findData("localconfig"))
+    dlg.restore_btn.click()  # adds a new safety backup at the top
+    assert steam.localconfig.read_bytes() == original
+    assert dlg._current_backup().id == first.id  # the selection didn't slide onto another backup

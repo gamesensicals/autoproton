@@ -166,6 +166,12 @@ def install(
         if not (unpacked / "compatibilitytool.vdf").is_file() or not (unpacked / "proton").exists():
             raise GEError("The GE-Proton archive is missing files Steam needs; not installing it.")
         final = compat_dir / top
+        if final.exists() and not (final / "compatibilitytool.vdf").is_file():
+            # a broken leftover (an interrupted manual install?): move it aside rather than delete it
+            n = 1
+            while (compat_dir / f".autoproton-broken-{top}-{n}").exists():
+                n += 1
+            os.rename(final, compat_dir / f".autoproton-broken-{top}-{n}")
         if final.exists():
             shutil.rmtree(unpacked, ignore_errors=True)
         else:
@@ -189,6 +195,7 @@ def _tool_from(folder: Path) -> CompatTool | None:
 
 
 def _find_installed(compat_dir: Path, tag: str) -> CompatTool | None:
+    """An already-installed copy of ``tag``, if it's complete."""
     folder = compat_dir / tag
     if (folder / "compatibilitytool.vdf").is_file():
         return _tool_from(folder)
