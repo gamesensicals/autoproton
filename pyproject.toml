@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoproton"
+version = "0.1.0"
+description = "Pick the best Proton version and launch options for your Steam games from ProtonDB reports, and apply them safely."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "PySide6-Essentials>=6.6",
+    "certifi",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4.4", "vdf>=3.4", "pyinstaller>=6.10", "ruff"]
+
+[project.gui-scripts]
+autoproton = "autoproton.__main__:main"
+
+[project.scripts]
+autoproton-cli = "autoproton.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autoproton = ["resources/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+markers = ["gui: needs PySide6 and a Qt platform plugin"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
