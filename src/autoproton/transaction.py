@@ -266,7 +266,7 @@ def recover(ctx: AppContext, store: Store) -> str | None:
             return "An interrupted change left Steam's files half-updated. Close Steam and restart autoproton to repair it."
         backup = store.backups.get(entry.backup_set) if entry.backup_set else None
         repaired = []
-        for f, state in zip(files, states):
+        for f, state in zip(files, states, strict=True):
             if state != "new" or backup is None:
                 continue
             label = next((b.label for b in backup.files if b.source == f["path"]), None)
