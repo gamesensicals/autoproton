@@ -1,8 +1,8 @@
 import pytest
 import vdf as vdf_oracle
+from fakesteam import CONFIG, GE_VDF, LOCALCONFIG
 
 from autoproton.steam.vdftext import VdfDocument, VdfError, encode
-from fakesteam import CONFIG, GE_VDF, LOCALCONFIG
 
 APPS = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
 

@@ -1,0 +1,220 @@
+import json
+import os
+
+import pytest
+from fakesteam import make_proc
+
+from autoproton import atomic, transaction
+from autoproton.history import History
+from autoproton.models import CompatSetting, GameSettings
+from autoproton.steam import locate
+from autoproton.transaction import ChangePlan, Store
+
+
+def plan_for(ctx, appid=1091500, after=None, before=None):
+    inst = locate.find_installs(ctx)[0]
+    acct = locate.accounts(inst)[0]
+    before = before or transaction.current_settings(inst, acct, appid)
+    after = after or GameSettings("%command% --launcher-skip", CompatSetting("GE-Proton10-25"))
+    return ChangePlan(inst, acct, appid, "Cyberpunk 2077", before, after)
+
+
+def test_apply_writes_backs_up_and_logs(ctx, steam):
+    store = Store(ctx)
+    orig_local, orig_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
+    plan = plan_for(ctx)
+    entry = transaction.execute(ctx, store, plan)
+
+    assert transaction.current_settings(plan.install, plan.account, 1091500) == plan.after
+    backup = store.backups.get(entry.backup_set)
+    assert store.backups.read(backup, "localconfig") == orig_local
+    assert store.backups.read(backup, "config") == orig_cfg
+    (logged,) = store.history.entries(appid=1091500)
+    assert logged.before.launch_options == 'WINEDLLOVERRIDES="winmm,version=n,b" %command%'
+    assert logged.after == plan.after
+    assert not store.journal_path.exists()
+    # the symlinked ~/.steam/steam path still points at the real root
+    assert os.path.islink(ctx.home / ".steam/steam")
+
+
+def test_revert_restores_exact_original_bytes(ctx, steam):
+    store = Store(ctx)
+    orig_local, orig_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
+    entry = transaction.execute(ctx, store, plan_for(ctx))
+    revert = plan_for(ctx, after=entry.before)
+    transaction.execute(ctx, store, ChangePlan(**{**revert.__dict__, "action": "revert", "ref": entry.id}))
+    assert steam.localconfig.read_bytes() == orig_local
+    assert steam.config.read_bytes() == orig_cfg
+    assert [e.action for e in store.history.entries()] == ["revert", "apply"]
+
+
+def test_revert_of_game_without_prior_settings_removes_keys(ctx, steam):
+    store = Store(ctx)
+    orig_local, orig_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
+    entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings("-novid", CompatSetting("proton_10"))))
+    assert entry.before == GameSettings(None, None)
+    transaction.execute(ctx, store, plan_for(ctx, appid=570, after=entry.before))
+    assert steam.localconfig.read_bytes() == orig_local
+    assert steam.config.read_bytes() == orig_cfg
+
+
+def test_refuses_while_steam_runs(ctx, steam):
+    make_proc(ctx.sys_root, 777, "steam")
+    before = steam.localconfig.read_bytes()
+    with pytest.raises(transaction.SteamRunning):
+        transaction.execute(ctx, Store(ctx), plan_for(ctx))
+    assert steam.localconfig.read_bytes() == before
+
+
+def test_stale_state_detected(ctx, steam):
+    plan = plan_for(ctx)
+    text = steam.localconfig.read_text().replace("winmm,version=n,b", "dxgi=n")
+    steam.localconfig.write_text(text)
+    with pytest.raises(transaction.StaleState) as err:
+        transaction.execute(ctx, Store(ctx), plan)
+    assert "dxgi" in err.value.current.launch_options
+
+
+def test_nothing_to_do(ctx, steam):
+    plan = plan_for(ctx)
+    with pytest.raises(transaction.NothingToDo):
+        transaction.execute(ctx, Store(ctx), ChangePlan(**{**plan.__dict__, "after": plan.before}))
+
+
+def test_failure_on_second_file_rolls_back_first(ctx, steam, monkeypatch):
+    store = Store(ctx)
+    orig_local, orig_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
+    real_write = atomic.atomic_write
+    calls = []
+
+    def flaky(path, data, *a, **k):
+        calls.append(path)
+        if str(path).endswith("config.vdf") and len(calls) == 2:
+            raise OSError("disk full")
+        return real_write(path, data, *a, **k)
+
+    monkeypatch.setattr(transaction, "atomic_write", flaky)
+    with pytest.raises(OSError):
+        transaction.execute(ctx, store, plan_for(ctx))
+    assert steam.localconfig.read_bytes() == orig_local
+    assert steam.config.read_bytes() == orig_cfg
+    assert store.history.entries() == []
+    assert not store.journal_path.exists()
+
+
+def test_failed_verification_rolls_back(ctx, steam, monkeypatch):
+    store = Store(ctx)
+    orig_local = steam.localconfig.read_bytes()
+    plan = plan_for(ctx)
+    real = transaction.current_settings
+    seen = []
+
+    def lying(*a):
+        seen.append(1)
+        return GameSettings("tampered", None)
+
+    monkeypatch.setattr(transaction, "current_settings", lying)
+    with pytest.raises(transaction.VerifyFailed):
+        transaction.execute(ctx, store, plan)
+    monkeypatch.setattr(transaction, "current_settings", real)
+    assert seen and steam.localconfig.read_bytes() == orig_local
+
+
+def test_concurrent_lock(ctx, steam):
+    store = Store(ctx)
+    with store.lock():
+        with pytest.raises(transaction.Busy):
+            transaction.execute(ctx, store, plan_for(ctx))
+
+
+def _fake_journal(ctx, store, steam, state):
+    """Simulate a crash after the journal was written."""
+    plan = plan_for(ctx)
+    old = steam.localconfig.read_bytes()
+    from autoproton.steam import config_store
+    new_local, _ = config_store.build_changes(old, steam.config.read_bytes(), 1091500,
+                                              GameSettings("%command% -x", None))
+    backup = store.backups.create([("localconfig", steam.localconfig, old)], reason="apply")
+    entry = {"type": "change", "id": "e1", "ts": 1.0, "action": "apply", "steam_root": str(plan.install.root),
+             "account_id": plan.account.account_id, "appid": 1091500, "game": "Cyberpunk 2077",
+             "before": plan.before.to_json(), "after": {"launch_options": "%command% -x", "compat_tool": None},
+             "backup_set": backup.id}
+    files = [{"path": str(steam.localconfig.resolve()), "old": atomic.sha256(old), "new": atomic.sha256(new_local)}]
+    store.dir.mkdir(parents=True, exist_ok=True)
+    store.journal_path.write_text(json.dumps({"entry": entry, "files": files}))
+    if state == "new":
+        steam.localconfig.write_bytes(new_local)
+    elif state == "other":
+        steam.localconfig.write_bytes(new_local)
+        files.append({"path": str(steam.config.resolve()), "old": "x", "new": atomic.file_sha256(steam.config)})
+        files[0], files[1] = files[0], files[1]
+        store.journal_path.write_text(json.dumps({"entry": entry, "files": [files[0], {**files[1], "new": "y"}]}))
+    return old, new_local
+
+
+def test_recovery_finishes_completed_change(ctx, steam):
+    store = Store(ctx)
+    _fake_journal(ctx, store, steam, "new")
+    with pytest.raises(transaction.RecoveryNeeded):
+        transaction.execute(ctx, store, plan_for(ctx, before=GameSettings("%command% -x", None)))
+    msg = transaction.recover(ctx, store)
+    assert "Finished" in msg
+    assert [e.id for e in store.history.entries()] == ["e1"]
+    assert transaction.recover(ctx, store) is None
+
+
+def test_recovery_discards_unstarted_change(ctx, steam):
+    store = Store(ctx)
+    old, _ = _fake_journal(ctx, store, steam, "old")
+    assert "nothing was changed" in transaction.recover(ctx, store)
+    assert steam.localconfig.read_bytes() == old and store.history.entries() == []
+
+
+def test_recovery_repairs_half_written_change(ctx, steam):
+    store = Store(ctx)
+    old, _ = _fake_journal(ctx, store, steam, "other")
+    msg = transaction.recover(ctx, store)
+    assert "undone" in msg
+    assert steam.localconfig.read_bytes() == old
+
+
+def test_backups_pruned_but_pristine_kept(ctx, steam):
+    t = [1000.0]
+    ctx.clock = lambda: t[0]
+    store = Store(ctx, keep_backups=2)
+    original = steam.localconfig.read_bytes()
+    for i in range(4):
+        t[0] += 60
+        transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings(f"-n{i}", None)))
+    sets = store.backups.list()
+    regular = [s for s in sets if not s.id.startswith("pristine/")]
+    pristine = [s for s in sets if s.id.startswith("pristine/")]
+    assert len(regular) == 2
+    # only localconfig.vdf ever changed, so there is one pristine copy: the original file
+    (p_local,) = pristine
+    assert store.backups.read(p_local, "localconfig") == original
+
+
+def test_restore_file(ctx, steam):
+    store = Store(ctx)
+    original = steam.localconfig.read_bytes()
+    entry = transaction.execute(ctx, store, plan_for(ctx))
+    backup = store.backups.get(entry.backup_set)
+    plan = plan_for(ctx)
+    res = transaction.restore_file(ctx, store, backup, "localconfig", plan.install, plan.account)
+    assert steam.localconfig.read_bytes() == original
+    safety = store.backups.get(res.backup_set)
+    assert store.backups.read(safety, "localconfig") != original  # the pre-restore state was kept
+
+
+def test_history_marks_and_torn_lines(tmp_path):
+    h = History(tmp_path / "h.jsonl", clock=lambda: 5.0)
+    from autoproton.history import HistoryEntry
+    e = h.append(HistoryEntry("a", 1, "apply", "/s", "1", 10, "G", GameSettings(), GameSettings("x")))
+    with open(h.path, "a") as f:
+        f.write('{"type": "change", "id": "broken"')  # torn write, no newline
+    h.mark("a", "works")
+    (got,) = h.entries()
+    assert got.id == e.id and got.mark == "works"
+    with pytest.raises(ValueError):
+        h.mark("a", "great")

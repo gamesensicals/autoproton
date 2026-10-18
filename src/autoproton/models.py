@@ -77,7 +77,7 @@ class CompatSetting:
         return {"name": self.name, "config": self.config, "priority": self.priority}
 
     @classmethod
-    def from_json(cls, d: dict | None) -> "CompatSetting | None":
+    def from_json(cls, d: dict | None) -> CompatSetting | None:
         if not d:
             return None
         return cls(str(d.get("name", "")), str(d.get("config", "")), str(d.get("priority", "250")))
@@ -97,7 +97,7 @@ class GameSettings:
         }
 
     @classmethod
-    def from_json(cls, d: dict) -> "GameSettings":
+    def from_json(cls, d: dict) -> GameSettings:
         return cls(d.get("launch_options"), CompatSetting.from_json(d.get("compat_tool")))
 
     def describe_tool(self) -> str:

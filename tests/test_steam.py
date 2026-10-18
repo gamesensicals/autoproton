@@ -1,12 +1,11 @@
-import os
 
 import pytest
 import vdf as vdf_oracle
+from fakesteam import ACCOUNT_ID, FakeSteam, make_proc
 
 from autoproton import hardware
 from autoproton.models import CompatSetting, GameSettings
 from autoproton.steam import compat, config_store, library, locate, process
-from fakesteam import ACCOUNT_ID, FakeSteam, make_proc
 
 
 def test_finds_install_once_through_symlink(ctx, steam):

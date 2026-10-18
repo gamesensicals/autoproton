@@ -6,9 +6,9 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
 
 
 def _xdg(env: Mapping[str, str], var: str, home: Path, default: str) -> Path:
@@ -47,7 +47,7 @@ class AppContext:
     own_pid: int = field(default_factory=os.getpid)
 
     @classmethod
-    def default(cls, env: Mapping[str, str] | None = None) -> "AppContext":
+    def default(cls, env: Mapping[str, str] | None = None) -> AppContext:
         env = dict(os.environ if env is None else env)
         home = Path(env.get("HOME") or os.path.expanduser("~"))
         override = env.get("AUTOPROTON_STEAM_ROOT")

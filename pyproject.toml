@@ -37,3 +37,10 @@ markers = ["gui: needs PySide6 and a Qt platform plugin"]
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autoproton"]

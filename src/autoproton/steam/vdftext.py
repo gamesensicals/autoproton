@@ -11,8 +11,8 @@ the file stays byte-for-byte identical.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 
 class VdfError(ValueError):
@@ -45,7 +45,7 @@ class Node:
     value: str | None = None
     value_start: int = -1
     value_end: int = -1
-    children: list["Node"] | None = None
+    children: list[Node] | None = None
     close_pos: int = -1
     end: int = 0
 
@@ -53,11 +53,11 @@ class Node:
     def is_block(self) -> bool:
         return self.children is not None
 
-    def find_all(self, key: str) -> list["Node"]:
+    def find_all(self, key: str) -> list[Node]:
         k = key.casefold()
         return [c for c in (self.children or []) if c.key.casefold() == k]
 
-    def child(self, key: str) -> "Node | None":
+    def child(self, key: str) -> Node | None:
         found = self.find_all(key)
         return found[0] if found else None
 
@@ -174,14 +174,14 @@ class VdfDocument:
     # ---- loading and saving -------------------------------------------------
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "VdfDocument":
+    def from_bytes(cls, data: bytes) -> VdfDocument:
         bom = data.startswith(b"\xef\xbb\xbf")
         if bom:
             data = data[3:]
         return cls(data.decode("utf-8", "surrogateescape"), bom)
 
     @classmethod
-    def from_file(cls, path) -> "VdfDocument":
+    def from_file(cls, path) -> VdfDocument:
         with open(path, "rb") as f:
             return cls.from_bytes(f.read())
 

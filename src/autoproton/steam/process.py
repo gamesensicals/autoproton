@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Mapping
+from collections.abc import Mapping
 
 from ..context import AppContext
 from ..models import SteamInstall

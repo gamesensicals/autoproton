@@ -6,8 +6,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from autoproton.context import AppContext  # noqa: E402
 from fakesteam import make_default_steam  # noqa: E402
+
+from autoproton.context import AppContext  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
