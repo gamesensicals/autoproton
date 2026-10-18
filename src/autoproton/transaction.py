@@ -195,13 +195,11 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
         if current != plan.before:
             raise StaleState(current)
         try:
-            new_local, new_cfg = config_store.build_changes(local, cfg, plan.appid, plan.after)
+            new_local, new_cfg = config_store.build_changes(local, cfg, plan.appid, plan.after, current)
         except (VdfError, config_store.InvalidSetting) as e:
-            raise TransactionError(f"Could not change Steam's settings: {e}") from e
+            raise TransactionError(f"Could not change Steam's settings: {e}; nothing was written.") from e
         if new_local is None and new_cfg is None:
             raise NothingToDo()
-        if config_store.read_settings(new_local or local, new_cfg or cfg, plan.appid) != plan.after:
-            raise VerifyFailed("The edited files did not read back as intended; nothing was written.")
 
         changes: list[tuple[str, Path, bytes | None, bytes]] = []
         if new_local is not None:

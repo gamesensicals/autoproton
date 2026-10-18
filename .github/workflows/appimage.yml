@@ -20,8 +20,8 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Libraries Qt needs
@@ -37,8 +37,8 @@ jobs:
     # Build on the oldest system we support: the AppImage needs at least this glibc (2.35).
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Libraries Qt needs (bundled into the AppImage where allowed)
@@ -51,7 +51,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           APPIMAGE_EXTRACT_AND_RUN: "1"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: autoproton-AppImage
           path: dist/*.AppImage
@@ -66,7 +66,7 @@ jobs:
         image: ["ubuntu:22.04", "debian:12", "fedora:latest", "archlinux:latest", "opensuse/tumbleweed:latest"]
     container: ${{ matrix.image }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: autoproton-AppImage
       - name: Install what any desktop already has (graphics, fonts, D-Bus)
@@ -85,7 +85,7 @@ jobs:
                 wayland libx11 ;;
             opensuse-tumbleweed)
               zypper -n -q in Mesa-libEGL1 Mesa-libGL1 fontconfig dejavu-fonts libxkbcommon0 libdbus-1-3 \
-                libglib-2_0-0 libX11-xcb1 libwayland-client0 libwayland-cursor0 libwayland-egl1 ;;
+                libglib-2_0-0 libgthread-2_0-0 libX11-xcb1 libwayland-client0 libwayland-cursor0 libwayland-egl1 ;;
           esac
       - name: Self-test
         run: chmod +x ./*.AppImage && ./*.AppImage --self-test
@@ -100,7 +100,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: autoproton-AppImage
       - uses: softprops/action-gh-release@v2

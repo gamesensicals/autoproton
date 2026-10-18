@@ -89,6 +89,9 @@ def test_lists_games_with_tiers(window):
     assert m.rowCount() == 7
     assert m.summaries[1091500].tier == "gold"
     assert m.summaries[99999] is None
+    elden = m.row_of(1245620)
+    assert m.data(m.index(elden, 2)) == "Proton 9.0"  # settings read in the background, from one parse
+    assert "%command%" in m.data(m.index(m.row_of(1091500), 3))
     names = [window.proxy.index(r, 0).data() for r in range(window.proxy.rowCount())]
     assert names == sorted(names, key=str.casefold)
     window.search.setText("dota")

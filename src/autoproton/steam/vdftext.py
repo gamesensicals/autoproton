@@ -19,18 +19,19 @@ class VdfError(ValueError):
     """The text is not valid VDF."""
 
 
+# Each match is optional whitespace followed by one token, so whitespace doesn't cost a match of its own.
 _TOKEN = re.compile(
-    r"""
-      (?P<ws>\s+)
-    | (?P<comment>//[^\n]*)
-    | (?P<quoted>"(?:[^"\\]|\\.)*")
-    | (?P<open>\{)
-    | (?P<close>\})
-    | (?P<cond>\[[^\]\n]*\])
-    | (?P<bare>[^\s{}"\[\]]+)
-    """,
+    r"""\s*(?:
+      (//[^\n]*)                 # 1 comment
+    | ("(?:[^"\\]|\\.)*")         # 2 quoted string
+    | (\{)                       # 3 open
+    | (\})                       # 4 close
+    | (\[[^\]\n]*\])              # 5 conditional like [$WIN32]
+    | ([^\s{}"\[\]]+)              # 6 bare word
+    )""",
     re.VERBOSE | re.DOTALL,
 )
+_KINDS = (None, "comment", "quoted", "open", "close", "cond", "bare")
 
 _UNESCAPE = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
 
@@ -102,16 +103,18 @@ def encode(value: str) -> str:
 
 def _tokenize(text: str) -> list[tuple[str, int, int]]:
     tokens: list[tuple[str, int, int]] = []
-    pos, n = 0, len(text)
-    match = _TOKEN.match
-    while pos < n:
-        m = match(text, pos)
-        if m is None:
-            raise VdfError(f"unexpected character {text[pos]!r} on line {_line_of(text, pos)}")
-        kind = m.lastgroup
-        if kind != "ws" and kind != "comment":
-            tokens.append((kind, m.start(), m.end()))
+    append = tokens.append
+    kinds = _KINDS
+    pos = 0
+    for m in _TOKEN.finditer(text):
+        if m.start() != pos:  # finditer skipped something no token matches
+            break
+        idx = m.lastindex
         pos = m.end()
+        if idx != 1:
+            append((kinds[idx], m.start(idx), pos))
+    if text[pos:].strip():
+        raise VdfError(f"unexpected character {text[pos:].lstrip()[0]!r} on line {_line_of(text, pos)}")
     return tokens
 
 

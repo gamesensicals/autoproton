@@ -183,18 +183,20 @@ class MainWindow(QMainWindow):
         if self.install is None:
             return
         games = self.core.games(self.install)
-        settings = {}
-        if self.account:
-            for g in games:
-                try:
-                    settings[g.appid] = self.core.settings(self.install, self.account, g.appid)
-                except Exception:  # noqa: BLE001 - shown as "default"; the detail view reports errors
-                    pass
-        self.model.set_games(games, settings)
+        self.model.set_games(games, {})
         self.detail.show_empty()
         if not games:
             self.top_banner.addWidget(banner("No installed games found in this Steam library.", "info"))
+        if self.account:
+            inst, acct = self.install, self.account
+            self.runner.run(lambda: self.core.all_settings(inst, acct, [g.appid for g in games]),
+                            on_done=self._settings_loaded,
+                            on_failed=lambda e: self.statusBar().showMessage(f"Couldn't read Steam's settings: {friendly(e)}"))
         self._load_tiers(games)
+
+    def _settings_loaded(self, settings):
+        for appid, s in settings.items():
+            self.model.set_settings(appid, s)
 
     def _load_tiers(self, games: list[Game]):
         if self._tier_task is not None:
@@ -295,6 +297,11 @@ class MainWindow(QMainWindow):
             dlg.exec()
             if dlg.changed:
                 self._load_games()
+
+    def closeEvent(self, event):
+        if self._tier_task is not None:
+            self._tier_task.cancel.set()
+        super().closeEvent(event)
 
     def _poll_steam(self):
         running = self.core.steam_running()

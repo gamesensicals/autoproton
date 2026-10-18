@@ -37,5 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     window.show()
     window.start()
     code = app.exec()
-    window.runner.wait(5000)
+    if not window.runner.wait(3000):
+        # a ProtonDB request is still waiting on the network; don't keep the user waiting for it
+        import logging
+        import os
+
+        logging.shutdown()
+        os._exit(code)
     return code

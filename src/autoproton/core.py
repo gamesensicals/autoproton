@@ -71,6 +71,20 @@ class Core:
     def settings(self, install: SteamInstall, account: Account, appid: int) -> GameSettings:
         return current_settings(install, account, appid)
 
+    def all_settings(self, install: SteamInstall, account: Account, appids) -> dict[int, GameSettings]:
+        from .steam import config_store
+        from .transaction import EMPTY_CONFIG
+
+        try:
+            local = account.localconfig.read_bytes()
+        except OSError:
+            return {}
+        try:
+            cfg = install.config_vdf.read_bytes()
+        except OSError:
+            cfg = EMPTY_CONFIG
+        return config_store.read_all_settings(local, cfg, appids)
+
     def steam_running(self) -> bool:
         return process.is_running(self.ctx)
 
