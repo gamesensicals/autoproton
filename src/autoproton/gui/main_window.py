@@ -29,6 +29,8 @@ from .games import GamesFilter, GamesModel
 from .history_dialog import HistoryDialog
 from .workers import Runner, friendly
 
+FAILED = object()  # a rating lookup that couldn't reach ProtonDB
+
 
 class MainWindow(QMainWindow):
     def __init__(self, core: Core, runner: Runner | None = None):
@@ -159,6 +161,7 @@ class MainWindow(QMainWindow):
             self._set_install(inst)
 
     def _set_install(self, inst: SteamInstall):
+        self._clear_banner()
         self.install = inst
         accounts = self.core.accounts(inst)
         self.account_combo.blockSignals(True)
@@ -176,6 +179,7 @@ class MainWindow(QMainWindow):
         acct = self.account_combo.itemData(idx)
         if acct is not None and acct != self.account:
             self.account = acct
+            self._clear_banner()
             self._load_games()
 
     def _load_games(self):
@@ -189,8 +193,11 @@ class MainWindow(QMainWindow):
             self.top_banner.addWidget(banner("No installed games found in this Steam library.", "info"))
         if self.account:
             inst, acct = self.install, self.account
+            self._settings_gen = getattr(self, "_settings_gen", 0) + 1
+            gen = self._settings_gen
             self.runner.run(lambda: self.core.all_settings(inst, acct, [g.appid for g in games]),
-                            on_done=self._settings_loaded,
+                            # a slow read for an account the user has since switched away from is dropped
+                            on_done=lambda s: gen == self._settings_gen and self._settings_loaded(s),
                             on_failed=lambda e: self.statusBar().showMessage(f"Couldn't read Steam's settings: {friendly(e)}"))
         self._load_tiers(games)
 
@@ -210,13 +217,16 @@ class MainWindow(QMainWindow):
                 try:
                     task.report((appid, self.core.summary(appid)))
                 except Exception:  # noqa: BLE001 - one game's rating failing shouldn't stop the rest
-                    task.report((appid, None))
+                    task.report((appid, FAILED))
 
         self._tier_task = self.runner.run(work, on_progress=self._tier_loaded, with_task=True)
 
     def _tier_loaded(self, value):
         appid, summary = value
-        self.model.set_summary(appid, summary)
+        if summary is FAILED:
+            self.model.set_failed(appid)
+        else:
+            self.model.set_summary(appid, summary)
 
     # ---- selection -------------------------------------------------------------------
 
@@ -257,7 +267,7 @@ class MainWindow(QMainWindow):
     def _analyzed(self, gen: int, a: Analysis):
         if gen != self._generation:
             return  # the user picked another game meanwhile
-        if a.summary is not None or a.game.appid not in self.model.summaries:
+        if a.summary is not None:  # None can also mean the rating lookup failed; don't record that as "No reports"
             self.model.set_summary(a.game.appid, a.summary)
         self.model.set_settings(a.game.appid, a.current)
         self.detail.show_analysis(a)

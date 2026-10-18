@@ -195,7 +195,9 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
         if current != plan.before:
             raise StaleState(current)
         try:
-            new_local, new_cfg = config_store.build_changes(local, cfg, plan.appid, plan.after, current)
+            # new text is checked; undo and restore write back what Steam had, as it was
+            new_local, new_cfg = config_store.build_changes(
+                local, cfg, plan.appid, plan.after, current, check=plan.action == "apply")
         except (VdfError, config_store.InvalidSetting) as e:
             raise TransactionError(f"Could not change Steam's settings: {e}; nothing was written.") from e
         if new_local is None and new_cfg is None:
@@ -263,15 +265,30 @@ def recover(ctx: AppContext, store: Store) -> str | None:
         if process.is_running(ctx):
             return "An interrupted change left Steam's files half-updated. Close Steam and restart autoproton to repair it."
         backup = store.backups.get(entry.backup_set) if entry.backup_set else None
-        repaired = []
+        repaired, unrepaired = [], []
         for f, state in zip(files, states, strict=True):
-            if state != "new" or backup is None:
+            path = Path(f["path"])
+            if state == "old":
                 continue
-            label = next((b.label for b in backup.files if b.source == f["path"]), None)
+            if state == "other":
+                # changed again since (Steam rewrites these files when it exits): leave it be
+                unrepaired.append(path.name)
+                continue
+            label = next((b.label for b in backup.files if b.source == f["path"]), None) if backup else None
             if label:
-                atomic_write(Path(f["path"]), store.backups.read(backup, label))
-                repaired.append(Path(f["path"]).name)
+                atomic_write(path, store.backups.read(backup, label))
+                repaired.append(path.name)
+            elif f["old"] is None:
+                path.unlink(missing_ok=True)  # autoproton created this file; take it away again
+                repaired.append(path.name)
+            else:
+                unrepaired.append(path.name)
         store.journal_path.unlink()
+        if unrepaired:
+            # some of it may still be in effect: keep it in History so it can be undone from there
+            store.history.append(entry)
+            return (f"An interrupted change to {entry.game} may still be partly in effect "
+                    f"({', '.join(unrepaired)} changed since). It's in History, where you can undo it.")
         return (
             f"An interrupted change to {entry.game} was undone"
             + (f" ({', '.join(repaired)} restored from backup)." if repaired else ".")

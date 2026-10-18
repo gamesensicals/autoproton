@@ -21,6 +21,7 @@ class GamesModel(QAbstractTableModel):
         self.games: list[Game] = []
         self.settings: dict[int, GameSettings] = {}
         self.summaries: dict[int, Summary | None] = {}
+        self.failed: set[int] = set()  # couldn't reach ProtonDB; tried again on the next reload
         self.loading: set[int] = set()
 
     def set_games(self, games: list[Game], settings: dict[int, GameSettings]) -> None:
@@ -31,6 +32,12 @@ class GamesModel(QAbstractTableModel):
 
     def set_summary(self, appid: int, summary: Summary | None) -> None:
         self.summaries[appid] = summary
+        self.failed.discard(appid)
+        self.loading.discard(appid)
+        self._changed(appid, 1)
+
+    def set_failed(self, appid: int) -> None:
+        self.failed.add(appid)
         self.loading.discard(appid)
         self._changed(appid, 1)
 
@@ -73,6 +80,10 @@ class GamesModel(QAbstractTableModel):
                 return game.name if role != self.SortRole else game.name.casefold()
             if col == 1:
                 if game.appid not in self.summaries:
+                    if game.appid in self.failed:
+                        if role == Qt.ItemDataRole.ToolTipRole:
+                            return "Couldn't reach ProtonDB. Press “Reload games” to try again."
+                        return "?" if role == Qt.ItemDataRole.DisplayRole else 97
                     return "…" if role == Qt.ItemDataRole.DisplayRole else (99 if role == self.SortRole else "Loading")
                 if summary is None:
                     return "No reports" if role != self.SortRole else 98

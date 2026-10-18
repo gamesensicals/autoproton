@@ -73,9 +73,10 @@ def _canonical_dll_overrides(value: str) -> str:
         part = part.strip()
         if not part:
             continue
-        dlls, _, mode = part.partition("=")
+        dlls, sep, mode = part.partition("=")
         names = ",".join(sorted(d.strip().lower().removesuffix(".dll") for d in dlls.split(",") if d.strip()))
-        entries.append(f"{names}={mode.strip().replace(' ', '')}" if mode else names)
+        # keep the "=" even with no mode: "d3d12=" disables d3d12, plain "d3d12" is ignored by Wine
+        entries.append(f"{names}={mode.strip().replace(' ', '')}" if sep else names)
     return ";".join(sorted(entries))
 
 
@@ -102,6 +103,11 @@ def parse(text: str | None, strict: bool = True) -> Parsed:
         return out
     if words and words[0] == "env":
         words = words[1:]
+    if strict:
+        # "%command%" glued to something else would put a second command in the string
+        glued = [w for w in words if COMMAND in w and w != COMMAND]
+        out.rejected.extend(glued)
+        words = [w for w in words if w not in glued]
 
     if COMMAND in words:
         out.has_command = True
@@ -125,7 +131,8 @@ def parse(text: str | None, strict: bool = True) -> Parsed:
         if "=" in w and knowledge.ENV_NAME.match(w.split("=", 1)[0]):
             key, value = w.split("=", 1)
             if strict:
-                if not knowledge.env_allowed(key) or not knowledge.SAFE_ENV_VALUE.match(value) or "/" in value:
+                if (not knowledge.env_allowed(key) or not knowledge.SAFE_ENV_VALUE.match(value)
+                        or "/" in value or knowledge.runs_commands(value)):
                     out.rejected.append(w)
                     continue
                 if key == "WINEDLLOVERRIDES":
@@ -142,6 +149,7 @@ def parse(text: str | None, strict: bool = True) -> Parsed:
                 i += 1
             continue
         extra = []
+        unsafe = False
         until_dashdash = name == "gamescope"
         while i < len(pre):
             nxt = pre[i]
@@ -150,15 +158,25 @@ def parse(text: str | None, strict: bool = True) -> Parsed:
                 if until_dashdash:
                     extra.append("--")
                 break
-            if not until_dashdash and not nxt.startswith("-"):
-                break
             if until_dashdash and "=" in nxt and knowledge.ENV_NAME.match(nxt.split("=", 1)[0]):
                 break
+            if not nxt.startswith("-"):
+                if not until_dashdash or strict:
+                    break  # another program (checked on its own), or in strict mode the end of gamescope's options
             extra.append(nxt)
             i += 1
+            if strict and not knowledge.SAFE_FLAG.match(nxt):
+                unsafe = True
+            if (strict and until_dashdash and nxt in knowledge.GAMESCOPE_VALUE_FLAGS and i < len(pre)
+                    and not pre[i].startswith("-")):
+                value = pre[i]
+                i += 1
+                extra.append(value)
+                if not knowledge.SAFE_ARG_VALUE.match(value):
+                    unsafe = True
         if until_dashdash and extra[-1:] != ["--"]:
             extra.append("--")
-        if strict and not all(_safe_word(x) for x in extra):
+        if strict and (unsafe or not all(_safe_word(x) for x in extra)):
             out.rejected.append(" ".join([w, *extra]))
             continue
         out.wrappers.append(Component("wrapper", name if strict else w, " ".join(extra) or None, tuple(extra)))
@@ -194,28 +212,51 @@ def assemble(components: list[Component]) -> str:
     return " ".join(words)
 
 
+def _last_command_start(text: str) -> int:
+    """Where the last simple command in ``text`` starts: just after its last ; | or & outside quotes."""
+    start, quote, escaped = 0, None, False
+    for i, ch in enumerate(text):
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch in ";|&":
+            start = i + 1
+    return start
+
+
 def merge(current: str | None, add: list[Component]) -> str:
     """Add ``add`` to the user's existing launch options without rewriting what they typed.
 
-    Pieces the user already has (same variable, program or flag) are left as
-    they are. New variables go at the very front, new programs just before
-    ``%command%``, new arguments at the end.
+    Pieces the user already has in effect (same variable, program or flag) are
+    left as they are. New variables go at the start of the command that runs the
+    game, new programs just before ``%command%``, and new arguments right after
+    it, so they still reach the game when the user's text continues with a pipe
+    or a comment.
     """
     cur = (current or "").strip()
     if not cur or cur.lower() in _EMPTY - {COMMAND}:
         return assemble(add)
     have = parse(cur, strict=False)
-    have_keys = {c.vote_key for c in have.components}
+    # Without %command%, Steam passes all of the user's text to the game as
+    # arguments, so variables and programs written there aren't in effect.
+    have_keys = {c.vote_key for c in have.components if have.has_command or c.kind == "arg"}
     new = [c for c in add if c.vote_key not in have_keys]
     env = " ".join(c.text for c in new if c.kind == "env")
     wrappers = " ".join(c.text for c in sorted((c for c in new if c.kind == "wrapper"), key=lambda c: c.key == "gamescope"))
     args = " ".join(c.text for c in new if c.kind == "arg")
     if COMMAND in cur:
         before, after = cur.split(COMMAND, 1)
-        parts = [env, before.strip(), wrappers, COMMAND + after.rstrip(), args]
-    elif env or wrappers:
-        # without %command%, Steam adds the user's text after the game's command line
-        parts = [env, wrappers, COMMAND, cur, args]
-    else:
-        parts = [cur, args]
-    return " ".join(p for p in parts if p)
+        before = before.rstrip()
+        cut = _last_command_start(before)
+        head, tail = before[:cut].strip(), before[cut:].strip()
+        command = " ".join(p for p in [head, env, tail, wrappers, COMMAND, args] if p)
+        return command + after.rstrip()
+    if env or wrappers:
+        return " ".join(p for p in [env, wrappers, COMMAND, args, cur] if p)
+    return " ".join(p for p in [cur, args] if p)

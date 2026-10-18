@@ -47,6 +47,13 @@ def test_installed_games_skip_tools_and_cover_all_libraries(ctx, steam, tmp_path
     assert names == ["Cyberpunk 2077", "Dota 2", "ELDEN RING", "Grand Theft Auto V"]
 
 
+def test_games_named_proton_are_not_mistaken_for_tools(ctx, steam):
+    steam.add_game(400910, "Proton Pulse")
+    steam.add_game(2180100, "Proton Hotfix")  # a real tool, but without toolmanifest.vdf here
+    names = [g.name for g in library.installed_games(locate.find_installs(ctx)[0])]
+    assert "Proton Pulse" in names and "Proton Hotfix" not in names
+
+
 def test_old_libraryfolders_format(ctx, steam, tmp_path):
     lib2 = tmp_path / "old"
     (lib2 / "steamapps").mkdir(parents=True)

@@ -172,14 +172,35 @@ _DENY_ENV = {
     "VK_LAYER_PATH", "VK_ADD_LAYER_PATH", "VK_INSTANCE_LAYERS", "LIBGL_DRIVERS_PATH",
     "__EGL_VENDOR_LIBRARY_FILENAMES", "GCONV_PATH", "GIO_MODULE_DIR", "GTK_PATH", "NODE_OPTIONS",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+    # gamemoderun runs $GAMEMODERUNEXEC in front of the game
+    "GAMEMODERUNEXEC",
 }
 _DENY_PREFIXES = ("LD_", "PYTHON", "PERL", "RUBY", "XDG_", "DBUS_", "STEAM_RUNTIME", "STEAM_COMPAT_", "SSL_",
                   "PRESSURE_VESSEL", "GIO_", "GDK_")
-_DENY_SUFFIXES = ("_PATH", "_DIR", "_FILE", "_FILES", "_FILENAMES", "_PREFIX", "_SCRIPT", "_CMD", "_COMMAND")
+_DENY_SUFFIXES = ("_PATH", "_DIR", "_FILE", "_FILES", "_FILENAMES", "_PREFIX", "_SCRIPT", "_CMD", "_COMMAND",
+                  "EXEC")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SAFE_ENV_VALUE = re.compile(r"^[A-Za-z0-9_.,:;=+\-@%]*$")
+SAFE_ENV_VALUE = re.compile(r"^[A-Za-z0-9_.,:;=+\-@]*$")
 SAFE_FLAG = re.compile(r"^[-+]{1,2}[A-Za-z0-9][A-Za-z0-9_.\-=:,+]*$")
 SAFE_ARG_VALUE = re.compile(r"^[A-Za-z0-9_.\-=:,+]+$")
+
+
+# gamescope options that take a value (gamescope --help). Any other word after
+# gamescope ends its options, so a stray program name can't ride along.
+GAMESCOPE_VALUE_FLAGS = {
+    "-W", "-H", "-w", "-h", "-r", "-o", "-F", "-S", "-O", "-s", "-C", "-m", "-R", "-T",
+    "--output-width", "--output-height", "--nested-width", "--nested-height", "--nested-refresh",
+    "--nested-unfocused-refresh", "--max-scale", "--scaler", "--filter", "--sharpness", "--fsr-sharpness",
+    "--prefer-output", "--display-index", "--backend", "--framerate-limit", "--mouse-sensitivity",
+    "--cursor-scale-height", "--hdr-itm-target-nits", "--hdr-sdr-content-nits", "--hdr-itm-sdr-nits",
+    "--xwayland-count", "--default-touch-mode", "--hide-cursor-delay", "--fade-out-duration",
+    "--sdr-gamut-wideness", "--force-orientation", "--prefer-vk-device",
+}
+
+
+def runs_commands(value: str) -> bool:
+    """True for values with an ``exec=`` entry, like MangoHud's, which runs a shell command."""
+    return any(part.split("=", 1)[0].strip().lower() == "exec" for part in re.split(r"[,:;]", value))
 
 
 def env_allowed(key: str) -> bool:

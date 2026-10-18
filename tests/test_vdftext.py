@@ -119,3 +119,24 @@ def test_conditionals_are_skipped():
 
 def test_encode_escapes_like_steam():
     assert encode('a"b\\c') == '"a\\"b\\\\c"'
+
+
+def test_reads_and_writes_follow_steams_first_match_rule():
+    # Steam reads the first "Apps"/"apps" block. Here only the later one has 570's options.
+    text = ('"S"\n{\n\t"Apps"\n\t{\n\t\t"570"\n\t\t{\n\t\t\t"LastPlayed"\t\t"1"\n\t\t}\n\t}\n'
+            '\t"apps"\n\t{\n\t\t"570"\n\t\t{\n\t\t\t"LaunchOptions"\t\t"old"\n\t\t}\n\t}\n}\n')
+    d = doc(text)
+    assert d.get(("S", "apps", "570", "LaunchOptions")) is None  # what Steam sees
+    d.set(("S", "apps", "570", "LaunchOptions"), "new")
+    assert d.get(("S", "apps", "570", "LaunchOptions")) == "new"
+    assert [n.value for n in d.find_all(("S", "apps", "570", "LaunchOptions"))] == ["new", "new"]
+    # an appid only under the later spelling gets created under the first one too
+    d.set(("S", "apps", "999", "LaunchOptions"), "x")
+    assert d.get(("S", "apps", "999", "LaunchOptions")) == "x"
+
+
+def test_delete_if_empty_only_removes_empty_blocks():
+    d = doc('"a"\n{\n\t"b"\n\t{\n\t}\n\t"c"\n\t{\n\t\t"x"\t\t"1"\n\t}\n}\n')
+    assert d.delete_if_empty(("a", "b")) == 1
+    assert d.delete_if_empty(("a", "c")) == 0
+    assert d.to_bytes() == b'"a"\n{\n\t"c"\n\t{\n\t\t"x"\t\t"1"\n\t}\n}\n'

@@ -18,7 +18,9 @@ from .vdftext import VdfDocument
 APPS_PATH = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
 COMPAT_PATH = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping")
 
-_CONTROL = {chr(c) for c in range(32)} | {"\x7f"}
+# Tabs are fine (Steam stores them escaped, and its own text box allows them);
+# other control characters have no business in a launch command.
+_CONTROL = ({chr(c) for c in range(32)} - {"\t"}) | {"\x7f"}
 
 
 class InvalidSetting(ValueError):
@@ -58,28 +60,38 @@ def validate_launch_options(value: str) -> None:
         raise InvalidSetting(f"launch options contain control characters: {', '.join(bad)}")
 
 
-def edit_launch_options(doc: VdfDocument, appid: int, value: str | None) -> None:
+def edit_launch_options(doc: VdfDocument, appid: int, value: str | None, check: bool = True) -> None:
+    """Set or remove a game's launch options.
+
+    ``check`` validates new text. Undo turns it off: it only ever writes back
+    what was read from Steam, which must go back exactly as it was.
+    """
     path = (*APPS_PATH, str(appid), "LaunchOptions")
     if value is None:
         doc.delete(path)
+        # a block that only existed to hold the launch options goes too
+        doc.delete_if_empty((*APPS_PATH, str(appid)))
     else:
-        validate_launch_options(value)
+        if check:
+            validate_launch_options(value)
         doc.set(path, value)
 
 
-def edit_compat(doc: VdfDocument, appid: int, value: CompatSetting | None) -> None:
+def edit_compat(doc: VdfDocument, appid: int, value: CompatSetting | None, check: bool = True) -> None:
     path = (*COMPAT_PATH, str(appid))
     if value is None:
         doc.delete(path)
+        doc.delete_if_empty(COMPAT_PATH)
         return
     for field_name, field_value in (("name", value.name), ("config", value.config), ("priority", value.priority)):
-        if any(c in _CONTROL for c in field_value):
+        if check and any(c in _CONTROL for c in field_value):
             raise InvalidSetting(f"compat tool {field_name} contains control characters")
         doc.set((*path, field_name), field_value)
 
 
 def build_changes(
-    localconfig: bytes, config: bytes, appid: int, after: GameSettings, current: GameSettings | None = None
+    localconfig: bytes, config: bytes, appid: int, after: GameSettings, current: GameSettings | None = None,
+    check: bool = True,
 ) -> tuple[bytes | None, bytes | None]:
     """New file contents that give ``appid`` the settings in ``after``.
 
@@ -91,13 +103,13 @@ def build_changes(
     new_local = new_config = None
     if current.launch_options != after.launch_options:
         doc = VdfDocument.from_bytes(localconfig)
-        edit_launch_options(doc, appid, after.launch_options)
+        edit_launch_options(doc, appid, after.launch_options, check)
         if read_launch_options(doc, appid) != after.launch_options:
             raise InvalidSetting("the edited localconfig.vdf didn't read back as intended")
         new_local = doc.to_bytes()
     if current.compat_tool != after.compat_tool:
         doc = VdfDocument.from_bytes(config)
-        edit_compat(doc, appid, after.compat_tool)
+        edit_compat(doc, appid, after.compat_tool, check)
         if read_compat(doc, appid) != after.compat_tool:
             raise InvalidSetting("the edited config.vdf didn't read back as intended")
         new_config = doc.to_bytes()

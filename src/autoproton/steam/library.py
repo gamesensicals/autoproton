@@ -11,7 +11,11 @@ from .vdftext import VdfDocument, VdfError
 
 # Steamworks Common Redistributables is not a game, and has no toolmanifest.vdf.
 NOT_GAMES = {228980}
-_TOOL_NAME = re.compile(r"^(Proton\b|Steam Linux Runtime|Steamworks Common)", re.I)
+# Valve's own tool names. Narrow on purpose: a game can be called "Proton Pulse".
+_TOOL_NAME = re.compile(
+    r"^(Proton (\d|Experimental|Hotfix|Next|EasyAntiCheat|BattlEye)|Steam Linux Runtime|Steamworks Common)",
+    re.IGNORECASE,
+)
 
 
 def library_paths(install: SteamInstall) -> list[Path]:
