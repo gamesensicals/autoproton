@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -17,9 +18,9 @@ def _xdg(env: Mapping[str, str], var: str, home: Path, default: str) -> Path:
     return base / "autoproton"
 
 
-def default_spawn(argv: Sequence[str], env: Mapping[str, str]) -> None:
-    """Start a program detached from us (Steam, xdg-open)."""
-    subprocess.Popen(
+def default_spawn(argv: Sequence[str], env: Mapping[str, str]) -> subprocess.Popen:
+    """Start a program detached from us (Steam, xdg-open), and collect it when it exits."""
+    proc = subprocess.Popen(
         list(argv),
         env=dict(env),
         stdin=subprocess.DEVNULL,
@@ -28,6 +29,9 @@ def default_spawn(argv: Sequence[str], env: Mapping[str, str]) -> None:
         start_new_session=True,
         close_fds=True,
     )
+    # without this, a finished `steam -shutdown` would linger as a zombie still named "steam"
+    threading.Thread(target=proc.wait, daemon=True).start()
+    return proc
 
 
 @dataclass

@@ -1,3 +1,4 @@
+import os
 
 import pytest
 import vdf as vdf_oracle
@@ -129,6 +130,30 @@ def test_steam_running_detection(ctx):
     assert process.steam_pids(ctx) == [4343]
 
 
+def test_zombie_steam_is_not_running(ctx):
+    d = make_proc(ctx.sys_root, 4444, "steam")
+    (d / "stat").write_text("4444 (steam) Z 1 4444 4444 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 1 0 0\n")
+    assert not process.is_running(ctx)
+    (d / "stat").write_text("4444 (steam) S 1 4444 4444 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 1 0 0\n")
+    assert process.is_running(ctx)
+
+
+def test_default_spawn_reaps_children(tmp_path):
+    import time
+
+    from autoproton.context import default_spawn
+
+    script = tmp_path / "steam"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    proc = default_spawn([str(script), "-shutdown"], {"PATH": "/usr/bin:/bin"})
+    for _ in range(50):
+        if not os.path.exists(f"/proc/{proc.pid}"):
+            break
+        time.sleep(0.05)
+    assert not os.path.exists(f"/proc/{proc.pid}"), "finished child was left as a zombie"
+
+
 def test_own_process_is_ignored(ctx):
     make_proc(ctx.sys_root, ctx.own_pid, "steam")
     assert not process.is_running(ctx)
@@ -147,7 +172,8 @@ def test_shutdown_commands_use_clean_env(ctx, steam):
 
 
 def test_clean_env_drops_bundle_library_path_without_orig():
-    env = process.clean_env({"LD_LIBRARY_PATH": "/tmp/.mount_x/usr/lib", "APPIMAGE": "/a.AppImage", "HOME": "/h"})
+    env = process.clean_env({"LD_LIBRARY_PATH": "/tmp/.mount_x/usr/lib", "APPIMAGE": "/a.AppImage", "HOME": "/h",
+                             "_PYI_LINUX_PROCESS_NAME": "autoproton"})
     assert env == {"HOME": "/h"}
     # outside a bundle, the user's own LD_LIBRARY_PATH is kept
     assert process.clean_env({"LD_LIBRARY_PATH": "/opt/x"}) == {"LD_LIBRARY_PATH": "/opt/x"}
