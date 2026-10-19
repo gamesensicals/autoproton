@@ -35,14 +35,14 @@ class HistoryEntry:
     ref: str | None = None
     note: str = ""
     mark: str = "untested"
-    created: tuple[str, ...] = ()  # blocks this change added to Steam's files; undo removes only these
+    missing: tuple[str, ...] = ()  # blocks missing from Steam's files before this change; undo may remove only these
 
     def to_json(self) -> dict:
         return {
             "type": "change", "id": self.id, "ts": self.ts, "action": self.action, "steam_root": self.steam_root,
             "account_id": self.account_id, "appid": self.appid, "game": self.game,
             "before": self.before.to_json(), "after": self.after.to_json(),
-            "backup_set": self.backup_set, "ref": self.ref, "note": self.note, "created": list(self.created),
+            "backup_set": self.backup_set, "ref": self.ref, "note": self.note, "missing": list(self.missing),
         }
 
     @classmethod
@@ -52,7 +52,7 @@ class HistoryEntry:
             account_id=str(d.get("account_id", "")), appid=d.get("appid"), game=d.get("game", ""),
             before=GameSettings.from_json(d.get("before") or {}), after=GameSettings.from_json(d.get("after") or {}),
             backup_set=d.get("backup_set"), ref=d.get("ref"), note=d.get("note", ""),
-            created=tuple(d.get("created") or ()),
+            missing=tuple(d.get("missing") or ()),
         )
 
 

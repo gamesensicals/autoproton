@@ -145,3 +145,16 @@ def test_delete_if_empty_only_removes_empty_blocks():
     assert d.delete_if_empty(("a", "b")) == 1
     assert d.delete_if_empty(("a", "c")) == 0
     assert d.to_bytes() == b'"a"\n{\n\t"c"\n\t{\n\t\t"x"\t\t"1"\n\t}\n}\n'
+
+
+def test_delete_removes_every_copy_in_the_block_steam_reads():
+    d = doc('"a"\n{\n\t"k"\t\t"1"\n\t"x"\t\t"y"\n\t"K"\t\t"2"\n}\n')
+    assert d.delete(("a", "k")) == 2  # otherwise "2" would become the value Steam sees
+    assert d.to_bytes() == b'"a"\n{\n\t"x"\t\t"y"\n}\n'
+
+
+def test_delete_if_empty_keeps_a_block_with_a_namesake_beside_it():
+    text = '"a"\n{\n\t"b"\n\t{\n\t}\n\t"b"\n\t{\n\t\t"x"\t\t"1"\n\t}\n}\n'
+    d = doc(text)
+    assert d.delete_if_empty(("a", "b")) == 0  # removing it would make Steam read the other "b"
+    assert d.to_bytes() == text.encode()

@@ -260,21 +260,33 @@ class VdfDocument:
             self._apply([(node.value_start, node.value_end, encode(value))])
 
     def delete(self, path: Sequence[str]) -> int:
-        """Remove the node Steam reads at ``path``. Returns 1 if there was one, else 0."""
+        """Remove ``path`` from the block Steam reads (see ``first``). Returns how many were removed.
+
+        Every copy of the key in that one block goes, since a later duplicate
+        would otherwise become the one Steam sees. Copies under another
+        spelling of a parent (``Apps`` next to ``apps``) are left alone.
+        """
         if not path:
             raise ValueError("empty path")
-        node = self.first(path)
-        if node is None:
-            return 0
-        self._apply([self._delete_op(node)])
-        return 1
+        parent = self.first(path[:-1])
+        nodes = parent.find_all(path[-1]) if parent is not None and parent.is_block else []
+        if nodes:
+            self._apply([self._delete_op(n) for n in nodes])
+        return len(nodes)
 
     def delete_if_empty(self, path: Sequence[str]) -> int:
-        """Remove the block Steam reads at ``path`` if it has no children left."""
-        node = self.first(path)
-        if node is None or not node.is_block or node.children:
+        """Remove the block Steam reads at ``path`` if it has no children left.
+
+        A block with a namesake in the same parent stays: removing it would
+        make Steam read the other one instead.
+        """
+        if not path:
+            raise ValueError("empty path")
+        parent = self.first(path[:-1])
+        same = parent.find_all(path[-1]) if parent is not None and parent.is_block else []
+        if len(same) != 1 or not same[0].is_block or same[0].children:
             return 0
-        self._apply([self._delete_op(node)])
+        self._apply([self._delete_op(same[0])])
         return 1
 
     # ---- internals ----------------------------------------------------------

@@ -245,7 +245,7 @@ def test_undo_of_a_game_with_no_block_restores_exact_bytes(ctx, steam):
     original_local, original_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
     # 1174180 has no block in localconfig.vdf and no mapping in config.vdf
     entry = transaction.execute(ctx, store, plan_for(ctx, appid=1174180, after=GameSettings("-x", CompatSetting("proton_10"))))
-    assert set(entry.created) == {"app_block"}  # CompatToolMapping was already there
+    assert set(entry.missing) == {"app_block"}  # CompatToolMapping was already there
     undo(ctx, store, entry)
     assert steam.localconfig.read_bytes() == original_local
     assert steam.config.read_bytes() == original_cfg
@@ -257,7 +257,7 @@ def test_undo_removes_a_compat_block_it_created(ctx, home, steam):
     store = Store(ctx)
     entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings(None, CompatSetting("proton_10"))))
     assert b"CompatToolMapping" in steam.config.read_bytes()
-    assert store.history.get(entry.id).created == ("compat_block",)  # it's saved with the entry
+    assert store.history.get(entry.id).missing == ("compat_block",)  # it's saved with the entry
     undo(ctx, store, entry)
     assert steam.config.read_bytes() == original
 
@@ -272,7 +272,7 @@ def test_undo_keeps_empty_blocks_that_were_already_there(ctx, steam):
     assert b'"570"\n\t\t\t\t\t{\n\t\t\t\t\t}' in original_local
     store = Store(ctx)
     entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings("-novid", CompatSetting("proton_10"))))
-    assert entry.created == ()
+    assert entry.missing == ()
     undo(ctx, store, entry)
     assert steam.localconfig.read_bytes() == original_local
     assert steam.config.read_bytes() == original_cfg
@@ -290,6 +290,61 @@ def test_clearing_the_only_mapping_and_undoing_it_is_exact(ctx, steam):
     assert b"CompatToolMapping" in steam.config.read_bytes()  # an apply never removes the block
     undo(ctx, store, entry)
     assert steam.config.read_bytes() == original
+
+
+def test_clearing_launch_options_written_twice_in_one_block(ctx, steam):
+    # a hand edit left two LaunchOptions in 1091500's block; Steam reads the first
+    text = steam.localconfig.read_text()
+    first = '\t\t\t\t\t\t"LaunchOptions"\t\t"WINEDLLOVERRIDES=\\"winmm,version=n,b\\" %command%"\n'
+    assert first in text
+    steam.localconfig.write_text(text.replace(first, first + '\t\t\t\t\t\t"LaunchOptions"\t\t"-other"\n'))
+    store = Store(ctx)
+    transaction.execute(ctx, store, plan_for(ctx, after=GameSettings(None, None)))
+    assert transaction.current_settings(*_inst_acct(ctx), 1091500).launch_options is None
+    assert b"-other" not in steam.localconfig.read_bytes()
+
+
+def test_undo_with_a_mapping_written_twice_in_one_block(ctx, steam):
+    # a hand edit left 570 twice in CompatToolMapping: Steam reads the first, which forces no tool
+    text = steam.config.read_text()
+    block = '\t\t\t\t"CompatToolMapping"\n\t\t\t\t{\n'
+    dup = ('\t\t\t\t\t"570"\n\t\t\t\t\t{\n\t\t\t\t\t\t"name"\t\t""\n\t\t\t\t\t}\n'
+           '\t\t\t\t\t"570"\n\t\t\t\t\t{\n\t\t\t\t\t\t"name"\t\t"proton_8"\n\t\t\t\t\t}\n')
+    steam.config.write_text(text.replace(block, block + dup))
+    store = Store(ctx)
+    assert plan_for(ctx, appid=570).before.compat_tool is None
+    entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings(None, CompatSetting("proton_10"))))
+    undo(ctx, store, entry)
+    assert transaction.current_settings(*_inst_acct(ctx), 570).compat_tool is None
+    assert b"proton_9" in steam.config.read_bytes()  # other games' mappings stay
+
+
+def test_undoing_an_older_change_gives_back_the_original_files(ctx, steam):
+    original_local, original_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
+    store = Store(ctx)
+    # 1174180 has no block in localconfig.vdf; the first change only forces a tool,
+    # the second adds launch options and so creates the game's block
+    a = transaction.execute(ctx, store, plan_for(ctx, appid=1174180, after=GameSettings(None, CompatSetting("proton_10"))))
+    transaction.execute(ctx, store, plan_for(ctx, appid=1174180, after=GameSettings("-b", CompatSetting("proton_10"))))
+    undo(ctx, store, a)
+    assert steam.localconfig.read_bytes() == original_local
+    assert steam.config.read_bytes() == original_cfg
+
+
+def test_undoing_an_older_change_removes_a_mapping_block_a_newer_one_added(ctx, steam):
+    steam.config.write_text('"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n\t\t\t}\n\t\t}\n\t}\n}\n')
+    original_local, original_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
+    store = Store(ctx)
+    a = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings("-a", None)))
+    transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings("-a", CompatSetting("proton_10"))))
+    undo(ctx, store, a)
+    assert steam.localconfig.read_bytes() == original_local
+    assert steam.config.read_bytes() == original_cfg
+
+
+def _inst_acct(ctx):
+    inst = locate.find_installs(ctx)[0]
+    return inst, locate.accounts(inst)[0]
 
 
 def test_undo_with_case_variant_duplicate_blocks_is_exact(ctx, steam):

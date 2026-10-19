@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import Core
+from ..ge_proton import GEError
 from ..models import CompatSetting, SteamInstall
 from ..net import Cancelled
 from ..transaction import ChangePlan, StaleState
@@ -151,7 +152,12 @@ class ApplyDialog(QDialog):
         self._after_ge()
 
     def _install_ge(self, task):
-        release = self.core.ge_release()
+        try:
+            release = self.core.ge_release()
+        except GEError:
+            if task.cancel.is_set():
+                raise Cancelled() from None  # the user pressed Cancel while GitHub didn't answer
+            raise
         task.report(("release", release.tag, release.size_mb))
         return self.core.install_ge(self.install, release, lambda s, d, t: task.report((s, d, t)), task.cancel)
 

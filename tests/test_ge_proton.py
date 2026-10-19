@@ -188,3 +188,29 @@ def test_dangling_symlink_leftover_is_moved_aside(tmp_path):
     assert tool.internal_name == TAG
     assert (compat / TAG / "compatibilitytool.vdf").is_file() and not (compat / TAG).is_symlink()
     assert (compat / f".autoproton-broken-{TAG}-1").is_symlink()
+
+
+def test_cancel_while_the_request_gets_no_answer_says_cancelled(tmp_path):
+    from autoproton.net import NetError
+
+    ev = threading.Event()
+    data = build_tar()
+    net = net_for(data)
+
+    def stuck():
+        ev.set()  # Cancel is pressed while the server never answers; then the request times out
+        return NetError("Could not download from dl: timed out")
+
+    net.routes["https://dl/ge.tar.gz"] = stuck
+    with pytest.raises(Cancelled):
+        ge_proton.install(net, ge_proton.latest_release(net), tmp_path / "c", cancel=ev)
+    assert list((tmp_path / "c").iterdir()) == []
+
+
+def test_a_real_download_error_is_still_an_error(tmp_path):
+    from autoproton.net import NetError
+
+    net = net_for(build_tar())
+    net.routes["https://dl/ge.tar.gz"] = NetError("Could not download from dl: timed out")
+    with pytest.raises(ge_proton.GEError, match="timed out"):
+        ge_proton.install(net, ge_proton.latest_release(net), tmp_path / "c", cancel=threading.Event())

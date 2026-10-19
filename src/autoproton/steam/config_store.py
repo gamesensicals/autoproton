@@ -60,8 +60,9 @@ def validate_launch_options(value: str) -> None:
         raise InvalidSetting(f"launch options contain control characters: {', '.join(bad)}")
 
 
-# Blocks a change can create, recorded in its history entry so undo removes
-# exactly those and never a block that was already in the file.
+# Blocks that may be missing before a change. Each history entry records which
+# were, so undoing it removes those once they're empty (whichever later change
+# added them) and never a block that was already in the file.
 APP_BLOCK = "app_block"  # apps/<appid> in localconfig.vdf
 COMPAT_BLOCK = "compat_block"  # CompatToolMapping in config.vdf
 
@@ -99,17 +100,13 @@ def edit_compat(doc: VdfDocument, appid: int, value: CompatSetting | None, check
         doc.set((*path, field_name), field_value)
 
 
-def created_blocks(old_local: bytes, new_local: bytes | None, old_cfg: bytes, new_cfg: bytes | None,
-                   appid: int) -> list[str]:
-    """Which of APP_BLOCK / COMPAT_BLOCK a change adds to the files."""
+def missing_blocks(localconfig: bytes, config: bytes, appid: int) -> list[str]:
+    """Which of APP_BLOCK / COMPAT_BLOCK are missing from the files as they are before a change."""
     out = []
-    if new_local is not None:
-        path = (*APPS_PATH, str(appid))
-        if VdfDocument.from_bytes(old_local).first(path) is None and VdfDocument.from_bytes(new_local).first(path):
-            out.append(APP_BLOCK)
-    if new_cfg is not None:
-        if VdfDocument.from_bytes(old_cfg).first(COMPAT_PATH) is None and VdfDocument.from_bytes(new_cfg).first(COMPAT_PATH):
-            out.append(COMPAT_BLOCK)
+    if VdfDocument.from_bytes(localconfig).first((*APPS_PATH, str(appid))) is None:
+        out.append(APP_BLOCK)
+    if VdfDocument.from_bytes(config).first(COMPAT_PATH) is None:
+        out.append(COMPAT_BLOCK)
     return out
 
 

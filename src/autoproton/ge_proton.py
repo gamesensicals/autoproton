@@ -143,6 +143,8 @@ def install(
                 hashing = _Hashing(f)
                 net.download(release.tarball_url, hashing, lambda d, t: report("download", d, t or release.size), cancel)
         except NetError as e:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled() from None  # the user pressed Cancel while it was stuck
             raise GEError(f"Downloading GE-Proton failed: {e}") from e
         report("verify", 0, 0)
         if hashing.h.hexdigest() != expected:

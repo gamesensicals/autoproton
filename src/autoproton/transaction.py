@@ -196,9 +196,10 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
             raise StaleState(current)
         try:
             # New text is checked; undo and restore write back what Steam had, as it was.
-            # Undo also removes the blocks the undone change created, and only those.
+            # Undo also removes, once empty, the blocks that were missing before the
+            # undone change, and only those.
             undone = store.history.get(plan.ref) if (plan.action == "revert" and plan.ref) else None
-            prune = frozenset(undone.created) if undone else frozenset()
+            prune = frozenset(undone.missing) if undone else frozenset()
             new_local, new_cfg = config_store.build_changes(
                 local, cfg, plan.appid, plan.after, current, check=plan.action == "apply", prune=prune)
         except (VdfError, config_store.InvalidSetting) as e:
@@ -219,7 +220,7 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
             id=store.history.new_id(plan.appid), ts=ctx.clock(), action=plan.action,
             steam_root=str(plan.install.root), account_id=plan.account.account_id, appid=plan.appid,
             game=plan.game, before=current, after=plan.after, backup_set=backup.id, ref=plan.ref, note=plan.note,
-            created=tuple(config_store.created_blocks(local, new_local, cfg, new_cfg, plan.appid)),
+            missing=tuple(config_store.missing_blocks(local, cfg, plan.appid)),
         )
         journal = {
             "entry": entry.to_json(),

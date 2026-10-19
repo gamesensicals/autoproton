@@ -318,3 +318,28 @@ def test_backups_tab_keeps_the_picked_backup_after_a_restore(qtbot, window, gui_
     dlg.restore_btn.click()  # adds a new safety backup at the top
     assert steam.localconfig.read_bytes() == original
     assert dlg._current_backup().id == first.id  # the selection didn't slide onto another backup
+
+
+def test_cancel_while_github_doesnt_answer_says_cancelled(qtbot, window, gui_core, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from autoproton.net import Cancelled
+
+    window.select_appid(570)
+    plan = gui_core.plan(window.install, window.account, None, 570, window.detail.chosen_settings())
+    dlg = ad.apply_dialog_for_plan(window, gui_core, window.runner, plan, ge_needed=True)
+    qtbot.addWidget(dlg)
+    task = SimpleNamespace(cancel=threading.Event(), report=lambda v: None)
+
+    def stuck():
+        task.cancel.set()  # Cancel is pressed while the release lookup hangs, then it fails
+        raise ge_proton.GEError("Couldn't reach GitHub: timed out")
+
+    monkeypatch.setattr(gui_core, "ge_release", stuck)
+    with pytest.raises(Cancelled):
+        dlg._install_ge(task)
+    task.cancel.clear()
+    monkeypatch.setattr(gui_core, "ge_release", lambda: (_ for _ in ()).throw(ge_proton.GEError("rate limited")))
+    with pytest.raises(ge_proton.GEError):  # without Cancel it's still the real error
+        dlg._install_ge(task)
