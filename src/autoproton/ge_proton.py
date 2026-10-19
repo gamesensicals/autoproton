@@ -166,10 +166,10 @@ def install(
         if not (unpacked / "compatibilitytool.vdf").is_file() or not (unpacked / "proton").exists():
             raise GEError("The GE-Proton archive is missing files Steam needs; not installing it.")
         final = compat_dir / top
-        if final.exists() and not (final / "compatibilitytool.vdf").is_file():
-            # a broken leftover (an interrupted manual install?): move it aside rather than delete it
+        if os.path.lexists(final) and not (final / "compatibilitytool.vdf").is_file():
+            # a broken leftover (an interrupted manual install, a dangling link): move it aside rather than delete it
             n = 1
-            while (compat_dir / f".autoproton-broken-{top}-{n}").exists():
+            while os.path.lexists(compat_dir / f".autoproton-broken-{top}-{n}"):
                 n += 1
             os.rename(final, compat_dir / f".autoproton-broken-{top}-{n}")
         if final.exists():

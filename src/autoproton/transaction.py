@@ -195,9 +195,12 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
         if current != plan.before:
             raise StaleState(current)
         try:
-            # new text is checked; undo and restore write back what Steam had, as it was
+            # New text is checked; undo and restore write back what Steam had, as it was.
+            # Undo also removes the blocks the undone change created, and only those.
+            undone = store.history.get(plan.ref) if (plan.action == "revert" and plan.ref) else None
+            prune = frozenset(undone.created) if undone else frozenset()
             new_local, new_cfg = config_store.build_changes(
-                local, cfg, plan.appid, plan.after, current, check=plan.action == "apply")
+                local, cfg, plan.appid, plan.after, current, check=plan.action == "apply", prune=prune)
         except (VdfError, config_store.InvalidSetting) as e:
             raise TransactionError(f"Could not change Steam's settings: {e}; nothing was written.") from e
         if new_local is None and new_cfg is None:
@@ -216,6 +219,7 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
             id=store.history.new_id(plan.appid), ts=ctx.clock(), action=plan.action,
             steam_root=str(plan.install.root), account_id=plan.account.account_id, appid=plan.appid,
             game=plan.game, before=current, after=plan.after, backup_set=backup.id, ref=plan.ref, note=plan.note,
+            created=tuple(config_store.created_blocks(local, new_local, cfg, new_cfg, plan.appid)),
         )
         journal = {
             "entry": entry.to_json(),
@@ -284,15 +288,23 @@ def recover(ctx: AppContext, store: Store) -> str | None:
             else:
                 unrepaired.append(path.name)
         store.journal_path.unlink()
-        if unrepaired:
-            # some of it may still be in effect: keep it in History so it can be undone from there
-            store.history.append(entry)
-            return (f"An interrupted change to {entry.game} may still be partly in effect "
-                    f"({', '.join(unrepaired)} changed since). It's in History, where you can undo it.")
-        return (
-            f"An interrupted change to {entry.game} was undone"
-            + (f" ({', '.join(repaired)} restored from backup)." if repaired else ".")
-        )
+        # Judge by what is in effect now, not by which files changed: Steam rewrites
+        # both files when it exits, so "changed since" alone says little.
+        try:
+            local_path = Path(entry.steam_root) / "userdata" / entry.account_id / "config" / "localconfig.vdf"
+            now = config_store.read_settings(_read(local_path), _read(Path(entry.steam_root) / "config" / "config.vdf",
+                                                                      EMPTY_CONFIG), entry.appid)
+        except (TransactionError, VdfError, OSError):
+            now = None
+        if now == entry.before:
+            return (f"An interrupted change to {entry.game} was undone"
+                    + (f" ({', '.join(repaired)} restored from backup)." if repaired else "."))
+        store.history.append(entry)
+        if now == entry.after:
+            return f"Finished saving an interrupted change to {entry.game}."
+        return (f"An interrupted change to {entry.game} may still be partly in effect"
+                + (f" ({', '.join(unrepaired)} changed since)" if unrepaired else "")
+                + ". It's in History, where you can undo it.")
 
 
 def restore_file(ctx: AppContext, store: Store, backup: BackupSet, label: str, install: SteamInstall,

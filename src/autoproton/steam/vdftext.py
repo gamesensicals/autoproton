@@ -236,20 +236,14 @@ class VdfDocument:
     # ---- editing ------------------------------------------------------------
 
     def set(self, path: Sequence[str], value: str) -> None:
-        """Set the leaf at ``path``, creating any missing blocks on the way.
+        """Set the leaf Steam reads at ``path`` (see ``first``), creating missing blocks.
 
-        The copy Steam reads (see ``first``) is created if it's missing. If the
-        file holds the same key in several spellings (``apps`` and ``Apps``),
-        every existing copy is updated too, so no reader sees a stale value.
+        If the file holds the same key in several spellings (``Apps`` and
+        ``apps``), only the copy Steam reads is touched; the others are left
+        exactly as they are, so undo can give back the original bytes.
         """
         if not path:
             raise ValueError("empty path")
-        where = "/".join(path)
-        ops = []
-        for leaf in self.find_all(path):
-            if leaf.is_block:
-                raise VdfError(f"{where} is a block, not a value")
-            ops.append((leaf.value_start, leaf.value_end, encode(value)))
         node, depth = self.root, 0
         for comp in path:
             if not node.is_block:
@@ -259,27 +253,29 @@ class VdfDocument:
                 break
             node, depth = nxt, depth + 1
         if depth < len(path):
-            ops.append(self._insert_op(node, list(path[depth:]), value))
+            self._apply([self._insert_op(node, list(path[depth:]), value)])
         elif node.is_block:
-            raise VdfError(f"{where} is a block, not a value")
-        self._apply(ops)
-
-    def delete_if_empty(self, path: Sequence[str]) -> int:
-        """Remove blocks at ``path`` that have no children left."""
-        nodes = [n for n in self.find_all(path) if n.is_block and not n.children]
-        if nodes:
-            self._apply([self._delete_op(n) for n in nodes])
-        return len(nodes)
+            raise VdfError(f"{'/'.join(path)} is a block, not a value")
+        else:
+            self._apply([(node.value_start, node.value_end, encode(value))])
 
     def delete(self, path: Sequence[str]) -> int:
-        """Remove every node at ``path``. Returns how many were removed."""
+        """Remove the node Steam reads at ``path``. Returns 1 if there was one, else 0."""
         if not path:
             raise ValueError("empty path")
-        nodes = self.find_all(path)
-        ops = [self._delete_op(n) for n in nodes]
-        if ops:
-            self._apply(ops)
-        return len(ops)
+        node = self.first(path)
+        if node is None:
+            return 0
+        self._apply([self._delete_op(node)])
+        return 1
+
+    def delete_if_empty(self, path: Sequence[str]) -> int:
+        """Remove the block Steam reads at ``path`` if it has no children left."""
+        node = self.first(path)
+        if node is None or not node.is_block or node.children:
+            return 0
+        self._apply([self._delete_op(node)])
+        return 1
 
     # ---- internals ----------------------------------------------------------
 

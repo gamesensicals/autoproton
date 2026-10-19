@@ -156,6 +156,8 @@ class Net:
                 try:
                     block = resp.read(chunk)
                 except (TimeoutError, ConnectionError, OSError) as e:
+                    if cancel is not None and cancel.is_set():
+                        raise Cancelled() from None  # the user pressed Cancel while it was stuck
                     raise NetError(f"The download stopped part-way ({e.__class__.__name__}). Try again.") from None
                 if not block:
                     break

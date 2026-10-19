@@ -80,13 +80,17 @@ def test_delete_missing_is_noop():
     assert d.to_bytes() == CONFIG.encode()
 
 
-def test_case_variant_duplicates_are_all_updated():
+def test_case_variant_duplicates_only_the_first_is_edited():
     text = '"S"\n{\n\t"Apps"\n\t{\n\t\t"1"\n\t\t{\n\t\t\t"LaunchOptions"\t\t"old"\n\t\t}\n\t}\n\t"apps"\n\t{\n\t\t"1"\n\t\t{\n\t\t\t"LaunchOptions"\t\t"old2"\n\t\t}\n\t}\n}\n'
     d = doc(text)
     d.set(("S", "apps", "1", "LaunchOptions"), "new")
-    assert [n.value for n in d.find_all(("S", "apps", "1", "LaunchOptions"))] == ["new", "new"]
-    d.delete(("S", "apps", "1", "LaunchOptions"))
-    assert d.find_all(("S", "apps", "1", "LaunchOptions")) == []
+    assert [n.value for n in d.find_all(("S", "apps", "1", "LaunchOptions"))] == ["new", "old2"]
+    assert d.delete(("S", "apps", "1", "LaunchOptions")) == 1
+    assert [n.value for n in d.find_all(("S", "apps", "1", "LaunchOptions"))] == ["old2"]
+    assert d.get(("S", "apps", "1", "LaunchOptions")) is None  # what Steam sees
+    assert d.delete_if_empty(("S", "apps", "1")) == 1
+    assert d.delete_if_empty(("S", "apps", "1")) == 0  # the hidden copy isn't empty and isn't first
+    assert "old2" in d.to_bytes().decode()
 
 
 def test_crlf_bom_and_comments_are_preserved():
@@ -129,7 +133,8 @@ def test_reads_and_writes_follow_steams_first_match_rule():
     assert d.get(("S", "apps", "570", "LaunchOptions")) is None  # what Steam sees
     d.set(("S", "apps", "570", "LaunchOptions"), "new")
     assert d.get(("S", "apps", "570", "LaunchOptions")) == "new"
-    assert [n.value for n in d.find_all(("S", "apps", "570", "LaunchOptions"))] == ["new", "new"]
+    # the copy Steam reads is the one written; the hidden one stays as it was
+    assert [n.value for n in d.find_all(("S", "apps", "570", "LaunchOptions"))] == ["new", "old"]
     # an appid only under the later spelling gets created under the first one too
     d.set(("S", "apps", "999", "LaunchOptions"), "x")
     assert d.get(("S", "apps", "999", "LaunchOptions")) == "x"

@@ -19,6 +19,12 @@ def plan_for(ctx, appid=1091500, after=None, before=None):
     return ChangePlan(inst, acct, appid, "Cyberpunk 2077", before, after)
 
 
+def undo(ctx, store, entry):
+    """Undo ``entry`` the way the app does (core.revert_plan)."""
+    plan = plan_for(ctx, appid=entry.appid, after=entry.before)
+    return transaction.execute(ctx, store, ChangePlan(**{**plan.__dict__, "action": "revert", "ref": entry.id}))
+
+
 def test_apply_writes_backs_up_and_logs(ctx, steam):
     store = Store(ctx)
     orig_local, orig_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
@@ -41,8 +47,7 @@ def test_revert_restores_exact_original_bytes(ctx, steam):
     store = Store(ctx)
     orig_local, orig_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
     entry = transaction.execute(ctx, store, plan_for(ctx))
-    revert = plan_for(ctx, after=entry.before)
-    transaction.execute(ctx, store, ChangePlan(**{**revert.__dict__, "action": "revert", "ref": entry.id}))
+    undo(ctx, store, entry)
     assert steam.localconfig.read_bytes() == orig_local
     assert steam.config.read_bytes() == orig_cfg
     assert [e.action for e in store.history.entries()] == ["revert", "apply"]
@@ -53,7 +58,7 @@ def test_revert_of_game_without_prior_settings_removes_keys(ctx, steam):
     orig_local, orig_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
     entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings("-novid", CompatSetting("proton_10"))))
     assert entry.before == GameSettings(None, None)
-    transaction.execute(ctx, store, plan_for(ctx, appid=570, after=entry.before))
+    undo(ctx, store, entry)
     assert steam.localconfig.read_bytes() == orig_local
     assert steam.config.read_bytes() == orig_cfg
 
@@ -170,14 +175,42 @@ def test_recovery_discards_unstarted_change(ctx, steam):
     assert steam.localconfig.read_bytes() == old and store.history.entries() == []
 
 
+def _map(steam, appid, name):
+    from autoproton.steam import config_store
+    from autoproton.steam.vdftext import VdfDocument
+    d = VdfDocument.from_bytes(steam.config.read_bytes())
+    config_store.edit_compat(d, appid, CompatSetting(name) if name else None)
+    steam.config.write_bytes(d.to_bytes())
+
+
 def test_recovery_with_a_file_changed_since_says_so_and_keeps_history(ctx, steam):
     store = Store(ctx)
     old, _ = _fake_journal(ctx, store, steam, "other")
+    _map(steam, 1091500, "proton_10")  # config.vdf now holds a setting that is neither before nor after
     msg = transaction.recover(ctx, store)
     # the file still in its "new" state is put back; the one changed since is left alone
     assert steam.localconfig.read_bytes() == old
-    assert "partly in effect" in msg and "undone" not in msg.split("History")[0].replace("undo it", "")
+    assert "partly in effect" in msg and "config.vdf" in msg
     assert [e.id for e in store.history.entries()] == ["e1"]  # still undoable from History
+
+
+def test_recovery_judges_by_the_settings_in_effect(ctx, steam):
+    store = Store(ctx)
+    old, _ = _fake_journal(ctx, store, steam, "other")
+    # config.vdf changed since, but not for this game: the change is fully undone
+    msg = transaction.recover(ctx, store)
+    assert steam.localconfig.read_bytes() == old
+    assert "was undone" in msg and "partly" not in msg
+    assert store.history.entries() == []
+
+
+def test_recovery_of_a_change_that_is_fully_in_effect_keeps_it(ctx, steam):
+    store = Store(ctx)
+    _, new_local = _fake_journal(ctx, store, steam, "new")
+    steam.localconfig.write_bytes(new_local + b"\n")  # Steam rewrote it since, keeping the new options
+    msg = transaction.recover(ctx, store)
+    assert "Finished" in msg
+    assert [e.id for e in store.history.entries()] == ["e1"]
 
 
 def test_recovery_repairs_half_written_change(ctx, steam):
@@ -203,7 +236,7 @@ def test_undo_works_when_original_launch_options_contain_a_tab(ctx, steam):
     assert plan.before.launch_options == "PROTON_LOG=1\t%command%"
     entry = transaction.execute(ctx, store, ChangePlan(**{**plan.__dict__, "after": GameSettings(
         "PROTON_LOG=1\t%command% --launcher-skip", None)}))
-    transaction.execute(ctx, store, plan_for(ctx, after=entry.before))
+    undo(ctx, store, entry)
     assert steam.localconfig.read_bytes() == original
 
 
@@ -212,7 +245,8 @@ def test_undo_of_a_game_with_no_block_restores_exact_bytes(ctx, steam):
     original_local, original_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
     # 1174180 has no block in localconfig.vdf and no mapping in config.vdf
     entry = transaction.execute(ctx, store, plan_for(ctx, appid=1174180, after=GameSettings("-x", CompatSetting("proton_10"))))
-    transaction.execute(ctx, store, plan_for(ctx, appid=1174180, after=entry.before))
+    assert set(entry.created) == {"app_block"}  # CompatToolMapping was already there
+    undo(ctx, store, entry)
     assert steam.localconfig.read_bytes() == original_local
     assert steam.config.read_bytes() == original_cfg
 
@@ -223,8 +257,58 @@ def test_undo_removes_a_compat_block_it_created(ctx, home, steam):
     store = Store(ctx)
     entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings(None, CompatSetting("proton_10"))))
     assert b"CompatToolMapping" in steam.config.read_bytes()
-    transaction.execute(ctx, store, plan_for(ctx, appid=570, after=entry.before))
+    assert store.history.get(entry.id).created == ("compat_block",)  # it's saved with the entry
+    undo(ctx, store, entry)
     assert steam.config.read_bytes() == original
+
+
+def test_undo_keeps_empty_blocks_that_were_already_there(ctx, steam):
+    # 570's app block and an empty CompatToolMapping exist before autoproton touches them
+    steam.localconfig.write_text(steam.localconfig.read_text().replace(
+        '\t\t\t\t\t\t"LastPlayed"\t\t"1700000001"\n\t\t\t\t\t\t"Playtime"\t\t"42"\n', ""))
+    steam.config.write_text('"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n'
+                            '\t\t\t{\n\t\t\t\t"CompatToolMapping"\n\t\t\t\t{\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n')
+    original_local, original_cfg = steam.localconfig.read_bytes(), steam.config.read_bytes()
+    assert b'"570"\n\t\t\t\t\t{\n\t\t\t\t\t}' in original_local
+    store = Store(ctx)
+    entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings("-novid", CompatSetting("proton_10"))))
+    assert entry.created == ()
+    undo(ctx, store, entry)
+    assert steam.localconfig.read_bytes() == original_local
+    assert steam.config.read_bytes() == original_cfg
+
+
+def test_clearing_the_only_mapping_and_undoing_it_is_exact(ctx, steam):
+    steam.config.write_text(steam.config.read_text().replace(
+        '\t\t\t\t\t"0"\n\t\t\t\t\t{\n\t\t\t\t\t\t"name"\t\t"proton_experimental"\n\t\t\t\t\t\t"config"\t\t""\n'
+        '\t\t\t\t\t\t"priority"\t\t"75"\n\t\t\t\t\t}\n', ""))
+    original = steam.config.read_bytes()
+    store = Store(ctx)
+    before = plan_for(ctx, appid=1245620).before
+    assert before.compat_tool == CompatSetting("proton_9", "", "250")
+    entry = transaction.execute(ctx, store, plan_for(ctx, appid=1245620, after=GameSettings(before.launch_options, None)))
+    assert b"CompatToolMapping" in steam.config.read_bytes()  # an apply never removes the block
+    undo(ctx, store, entry)
+    assert steam.config.read_bytes() == original
+
+
+def test_undo_with_case_variant_duplicate_blocks_is_exact(ctx, steam):
+    # a second, hidden "Apps" block after the one Steam reads
+    text = steam.localconfig.read_text()
+    marker = '\t\t\t\t"apps"\n'
+    hidden = '\t\t\t\t"Apps"\n\t\t\t\t{\n\t\t\t\t\t"570"\n\t\t\t\t\t{\n\t\t\t\t\t\t"LaunchOptions"\t\t"hidden"\n\t\t\t\t\t}\n\t\t\t\t}\n'
+    end = text.index("\n\t\t\t}\n", text.index(marker)) + 1  # end of the "Steam" block
+    steam.localconfig.write_text(text[:end] + hidden + text[end:])
+    original = steam.localconfig.read_bytes()
+    from autoproton.steam.vdftext import VdfDocument
+    copies = VdfDocument.from_bytes(original).find_all(("UserLocalConfigStore", "Software", "Valve", "Steam", "apps", "570"))
+    assert len(copies) == 2  # both spellings sit side by side under "Steam"
+    store = Store(ctx)
+    assert plan_for(ctx, appid=570).before.launch_options is None  # Steam doesn't see "hidden"
+    entry = transaction.execute(ctx, store, plan_for(ctx, appid=570, after=GameSettings("-novid", None)))
+    assert b'"hidden"' in steam.localconfig.read_bytes()  # the copy Steam ignores is left alone
+    undo(ctx, store, entry)
+    assert steam.localconfig.read_bytes() == original
 
 
 def test_backups_pruned_but_pristine_kept(ctx, steam):
