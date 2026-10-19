@@ -75,7 +75,7 @@ autoproton changes two things per game, and nothing else:
   exits. autoproton offers to close it, and can start it again afterwards.
 - Only the exact bytes of those settings change. The rest of each file stays
   byte-for-byte identical.
-- Before every change, both files are backed up to
+- Before every change, each file about to change is backed up to
   `~/.local/share/autoproton/backups/`. The first backup of each file is kept
   forever.
 - **History** lists every change. **Undo** puts back what Steam had before,

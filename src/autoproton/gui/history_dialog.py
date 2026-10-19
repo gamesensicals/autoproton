@@ -114,6 +114,11 @@ class HistoryDialog(QDialog):
     # ---- data -----------------------------------------------------------------------
 
     def reload(self):
+        # Keep the same entry and backup selected across a reload. Rows shift when
+        # a new change or backup is added at the top, and the next click must act
+        # on what the user picked.
+        keep_entry = self._current() if getattr(self, "entries", None) else None
+        keep_backup = self._current_backup() if getattr(self, "backups", None) else None
         self.entries = self.core.history(self.install, self.account, self.appid)
         self.table.setRowCount(len(self.entries))
         for r, e in enumerate(self.entries):
@@ -126,8 +131,10 @@ class HistoryDialog(QDialog):
             for c, text in enumerate(values):
                 self.table.setItem(r, c, QTableWidgetItem(text))
         self.table.resizeRowsToContents()
-        if self.entries:
-            self.table.selectRow(0)
+        row = next((r for r, e in enumerate(self.entries) if keep_entry and e.id == keep_entry.id),
+                   0 if self.entries else None)
+        if row is not None:
+            self.table.selectRow(row)
         self._selection()
 
         self.backups = self.core.backups()
@@ -136,6 +143,11 @@ class HistoryDialog(QDialog):
             files = ", ".join(f"{f.label}.vdf" for f in b.files)
             for c, text in enumerate((when(b.created), b.reason, b.game or "", files)):
                 self.btable.setItem(r, c, QTableWidgetItem(text))
+        brow = next((r for r, b in enumerate(self.backups) if keep_backup and b.id == keep_backup.id), None)
+        if brow is not None:
+            self.btable.selectRow(brow)
+        else:
+            self.btable.clearSelection()
         self._bselection()
 
     def _current(self):
@@ -147,6 +159,10 @@ class HistoryDialog(QDialog):
         game_change = e is not None and e.appid is not None
         for b in (self.undo_btn, self.redo_btn, self.works_btn, self.broken_btn):
             b.setEnabled(game_change)
+
+    def _current_backup(self):
+        rows = self.btable.selectionModel().selectedRows() if self.btable.selectionModel() else []
+        return self.backups[rows[0].row()] if rows else None
 
     def _bselection(self):
         rows = self.btable.selectionModel().selectedRows() if self.btable.selectionModel() else []
@@ -190,10 +206,9 @@ class HistoryDialog(QDialog):
         self.reload()
 
     def _restore_file(self):
-        rows = self.btable.selectionModel().selectedRows()
-        if not rows:
+        backup = self._current_backup()
+        if backup is None:
             return
-        backup = self.backups[rows[0].row()]
         label = self.file_combo.currentData()
         info = backup.file(label)
         dlg = ApplyDialog(

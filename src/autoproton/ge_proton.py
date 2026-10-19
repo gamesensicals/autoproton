@@ -143,6 +143,8 @@ def install(
                 hashing = _Hashing(f)
                 net.download(release.tarball_url, hashing, lambda d, t: report("download", d, t or release.size), cancel)
         except NetError as e:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled() from None  # the user pressed Cancel while it was stuck
             raise GEError(f"Downloading GE-Proton failed: {e}") from e
         report("verify", 0, 0)
         if hashing.h.hexdigest() != expected:
@@ -166,6 +168,12 @@ def install(
         if not (unpacked / "compatibilitytool.vdf").is_file() or not (unpacked / "proton").exists():
             raise GEError("The GE-Proton archive is missing files Steam needs; not installing it.")
         final = compat_dir / top
+        if os.path.lexists(final) and not (final / "compatibilitytool.vdf").is_file():
+            # a broken leftover (an interrupted manual install, a dangling link): move it aside rather than delete it
+            n = 1
+            while os.path.lexists(compat_dir / f".autoproton-broken-{top}-{n}"):
+                n += 1
+            os.rename(final, compat_dir / f".autoproton-broken-{top}-{n}")
         if final.exists():
             shutil.rmtree(unpacked, ignore_errors=True)
         else:
@@ -189,6 +197,7 @@ def _tool_from(folder: Path) -> CompatTool | None:
 
 
 def _find_installed(compat_dir: Path, tag: str) -> CompatTool | None:
+    """An already-installed copy of ``tag``, if it's complete."""
     folder = compat_dir / tag
     if (folder / "compatibilitytool.vdf").is_file():
         return _tool_from(folder)

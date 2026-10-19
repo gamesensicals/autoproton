@@ -6,6 +6,9 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # A release published on github.com with a new tag; the tag alone may not count as a push.
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -97,13 +100,27 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [appimage, distros]
     runs-on: ubuntu-latest
+    # the tag push and the release event can both fire; upload one at a time
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
         with:
           name: autoproton-AppImage
+      - name: Release notes
+        run: |
+          notes="docs/releases/${GITHUB_REF_NAME}.md"
+          if [ ! -f "$notes" ]; then
+            mkdir -p docs/releases
+            printf 'autoproton %s. See the README for how to download and run it.\n' "$GITHUB_REF_NAME" > "$notes"
+          fi
+          echo "NOTES=$notes" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
         with:
           files: "*.AppImage"
-          generate_release_notes: true
+          body_path: ${{ env.NOTES }}
+          fail_on_unmatched_files: true

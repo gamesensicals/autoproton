@@ -257,3 +257,89 @@ def test_no_steam_banner(qtbot, ctx):
     w.load()
     texts = [w.top_banner.itemAt(i).widget().text() for i in range(w.top_banner.count())]
     assert any("Steam wasn't found" in t for t in texts)
+
+
+def test_history_keeps_the_picked_entry_selected_after_marking(qtbot, window, gui_core, auto_exec):
+    window.select_appid(1091500)
+    window.detail.apply_btn.click()
+    window.select_appid(570)
+    window.detail.apply_btn.click()
+    dlg = HistoryDialog(window, gui_core, window.runner, window.install, window.account)
+    qtbot.addWidget(dlg)
+    older = dlg.entries[1]
+    dlg.table.selectRow(1)
+    dlg.works_btn.click()
+    assert dlg._current().id == older.id  # not the newest row
+    dlg.undo_btn.click()  # acts on the entry the user picked
+    assert settings(gui_core, 1091500).compat_tool is None
+    assert settings(gui_core, 570).launch_options is not None
+    assert dlg._current().id == older.id
+
+
+def test_failed_rating_lookup_shows_unknown_and_retries(qtbot, gui_core):
+    from autoproton.net import NetError
+
+    url = f"{pdb.BASE}/api/v1/reports/summaries/570.json"
+    good = gui_core.ctx.net.routes[url]
+    gui_core.ctx.net.routes[url] = NetError("offline")
+    w = MainWindow(gui_core, SyncRunner())
+    qtbot.addWidget(w)
+    w.load()
+    row = w.model.row_of(570)
+    assert w.model.data(w.model.index(row, 1)) == "?"
+    gui_core.ctx.net.routes[url] = good
+    w.load()  # "Reload games"
+    assert w.model.data(w.model.index(w.model.row_of(570), 1)) == "Gold"
+
+
+def test_cancelling_ge_download_is_not_an_error(qtbot, window, gui_core):
+    from autoproton.net import Cancelled
+
+    window.select_appid(570)
+    plan = gui_core.plan(window.install, window.account, None, 570, window.detail.chosen_settings())
+    dlg = ad.apply_dialog_for_plan(window, gui_core, window.runner, plan, ge_needed=True)
+    qtbot.addWidget(dlg)
+    dlg._fail(Cancelled())
+    assert dlg.pages.currentIndex() == 3
+    assert "Nothing was changed" in dlg.end_box.itemAt(0).widget().text()
+
+
+def test_backups_tab_keeps_the_picked_backup_after_a_restore(qtbot, window, gui_core, steam, auto_exec):
+    original = steam.localconfig.read_bytes()
+    window.select_appid(1091500)
+    window.detail.apply_btn.click()
+    window.select_appid(570)
+    window.detail.apply_btn.click()
+    dlg = HistoryDialog(window, gui_core, window.runner, window.install, window.account)
+    qtbot.addWidget(dlg)
+    first = next(b for b in dlg.backups if b.game == "Cyberpunk 2077")
+    dlg.btable.selectRow(dlg.backups.index(first))
+    dlg.file_combo.setCurrentIndex(dlg.file_combo.findData("localconfig"))
+    dlg.restore_btn.click()  # adds a new safety backup at the top
+    assert steam.localconfig.read_bytes() == original
+    assert dlg._current_backup().id == first.id  # the selection didn't slide onto another backup
+
+
+def test_cancel_while_github_doesnt_answer_says_cancelled(qtbot, window, gui_core, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from autoproton.net import Cancelled
+
+    window.select_appid(570)
+    plan = gui_core.plan(window.install, window.account, None, 570, window.detail.chosen_settings())
+    dlg = ad.apply_dialog_for_plan(window, gui_core, window.runner, plan, ge_needed=True)
+    qtbot.addWidget(dlg)
+    task = SimpleNamespace(cancel=threading.Event(), report=lambda v: None)
+
+    def stuck():
+        task.cancel.set()  # Cancel is pressed while the release lookup hangs, then it fails
+        raise ge_proton.GEError("Couldn't reach GitHub: timed out")
+
+    monkeypatch.setattr(gui_core, "ge_release", stuck)
+    with pytest.raises(Cancelled):
+        dlg._install_ge(task)
+    task.cancel.clear()
+    monkeypatch.setattr(gui_core, "ge_release", lambda: (_ for _ in ()).throw(ge_proton.GEError("rate limited")))
+    with pytest.raises(ge_proton.GEError):  # without Cancel it's still the real error
+        dlg._install_ge(task)

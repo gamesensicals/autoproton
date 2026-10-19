@@ -195,7 +195,13 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
         if current != plan.before:
             raise StaleState(current)
         try:
-            new_local, new_cfg = config_store.build_changes(local, cfg, plan.appid, plan.after, current)
+            # New text is checked; undo and restore write back what Steam had, as it was.
+            # Undo also removes, once empty, the blocks that were missing before the
+            # undone change, and only those.
+            undone = store.history.get(plan.ref) if (plan.action == "revert" and plan.ref) else None
+            prune = frozenset(undone.missing) if undone else frozenset()
+            new_local, new_cfg = config_store.build_changes(
+                local, cfg, plan.appid, plan.after, current, check=plan.action == "apply", prune=prune)
         except (VdfError, config_store.InvalidSetting) as e:
             raise TransactionError(f"Could not change Steam's settings: {e}; nothing was written.") from e
         if new_local is None and new_cfg is None:
@@ -214,6 +220,7 @@ def execute(ctx: AppContext, store: Store, plan: ChangePlan) -> HistoryEntry:
             id=store.history.new_id(plan.appid), ts=ctx.clock(), action=plan.action,
             steam_root=str(plan.install.root), account_id=plan.account.account_id, appid=plan.appid,
             game=plan.game, before=current, after=plan.after, backup_set=backup.id, ref=plan.ref, note=plan.note,
+            missing=tuple(config_store.missing_blocks(local, cfg, plan.appid)),
         )
         journal = {
             "entry": entry.to_json(),
@@ -263,19 +270,42 @@ def recover(ctx: AppContext, store: Store) -> str | None:
         if process.is_running(ctx):
             return "An interrupted change left Steam's files half-updated. Close Steam and restart autoproton to repair it."
         backup = store.backups.get(entry.backup_set) if entry.backup_set else None
-        repaired = []
+        repaired, unrepaired = [], []
         for f, state in zip(files, states, strict=True):
-            if state != "new" or backup is None:
+            path = Path(f["path"])
+            if state == "old":
                 continue
-            label = next((b.label for b in backup.files if b.source == f["path"]), None)
+            if state == "other":
+                # changed again since (Steam rewrites these files when it exits): leave it be
+                unrepaired.append(path.name)
+                continue
+            label = next((b.label for b in backup.files if b.source == f["path"]), None) if backup else None
             if label:
-                atomic_write(Path(f["path"]), store.backups.read(backup, label))
-                repaired.append(Path(f["path"]).name)
+                atomic_write(path, store.backups.read(backup, label))
+                repaired.append(path.name)
+            elif f["old"] is None:
+                path.unlink(missing_ok=True)  # autoproton created this file; take it away again
+                repaired.append(path.name)
+            else:
+                unrepaired.append(path.name)
         store.journal_path.unlink()
-        return (
-            f"An interrupted change to {entry.game} was undone"
-            + (f" ({', '.join(repaired)} restored from backup)." if repaired else ".")
-        )
+        # Judge by what is in effect now, not by which files changed: Steam rewrites
+        # both files when it exits, so "changed since" alone says little.
+        try:
+            local_path = Path(entry.steam_root) / "userdata" / entry.account_id / "config" / "localconfig.vdf"
+            now = config_store.read_settings(_read(local_path), _read(Path(entry.steam_root) / "config" / "config.vdf",
+                                                                      EMPTY_CONFIG), entry.appid)
+        except (TransactionError, VdfError, OSError):
+            now = None
+        if now == entry.before:
+            return (f"An interrupted change to {entry.game} was undone"
+                    + (f" ({', '.join(repaired)} restored from backup)." if repaired else "."))
+        store.history.append(entry)
+        if now == entry.after:
+            return f"Finished saving an interrupted change to {entry.game}."
+        return (f"An interrupted change to {entry.game} may still be partly in effect"
+                + (f" ({', '.join(unrepaired)} changed since)" if unrepaired else "")
+                + ". It's in History, where you can undo it.")
 
 
 def restore_file(ctx: AppContext, store: Store, backup: BackupSet, label: str, install: SteamInstall,

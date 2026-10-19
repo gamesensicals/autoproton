@@ -211,55 +211,83 @@ class VdfDocument:
         found = self.find_all(path)
         return found[0] if found else None
 
-    def get(self, path: Sequence[str]) -> str | None:
-        """First leaf value at ``path`` (the one Steam itself reads), or None."""
-        for node in self.find_all(path):
+    def first(self, path: Sequence[str]) -> Node | None:
+        """The node Steam itself reads at ``path``.
+
+        Steam's KeyValues lookup takes the first child with a matching name at
+        every level (ignoring case), so with both ``Apps`` and ``apps`` in a file,
+        only the first one counts.
+        """
+        node = self.root
+        for comp in path:
             if not node.is_block:
-                return node.value
-        return None
+                return None
+            nxt = node.child(comp)
+            if nxt is None:
+                return None
+            node = nxt
+        return node
+
+    def get(self, path: Sequence[str]) -> str | None:
+        """The value Steam reads at ``path``, or None."""
+        node = self.first(path)
+        return node.value if node is not None and not node.is_block else None
 
     # ---- editing ------------------------------------------------------------
 
     def set(self, path: Sequence[str], value: str) -> None:
-        """Set the leaf at ``path``, creating any missing blocks on the way.
+        """Set the leaf Steam reads at ``path`` (see ``first``), creating missing blocks.
 
-        If the file holds the same key in several spellings (``apps`` and
-        ``Apps``), every copy is updated so Steam sees the same value whichever
-        one it reads.
+        If the file holds the same key in several spellings (``Apps`` and
+        ``apps``), only the copy Steam reads is touched; the others are left
+        exactly as they are, so undo can give back the original bytes.
         """
         if not path:
             raise ValueError("empty path")
-        parents = self.find_all(path[:-1]) if len(path) > 1 else [self.root]
-        parents = [p for p in parents if p.is_block]
-        if parents:
-            leaves = [c for p in parents for c in p.find_all(path[-1])]
-            if leaves:
-                ops = []
-                for leaf in leaves:
-                    if leaf.is_block:
-                        raise VdfError(f"{'/'.join(path)} is a block, not a value")
-                    ops.append((leaf.value_start, leaf.value_end, encode(value)))
-                self._apply(ops)
-                return
-            self._apply([self._insert_op(parents[0], list(path[-1:]), value)])
-            return
         node, depth = self.root, 0
-        for comp in path[:-1]:
-            nxt = next((c for c in node.find_all(comp) if c.is_block), None)
+        for comp in path:
+            if not node.is_block:
+                raise VdfError(f"{'/'.join(path[:depth])} is a value, not a block")
+            nxt = node.child(comp)
             if nxt is None:
                 break
             node, depth = nxt, depth + 1
-        self._apply([self._insert_op(node, list(path[depth:]), value)])
+        if depth < len(path):
+            self._apply([self._insert_op(node, list(path[depth:]), value)])
+        elif node.is_block:
+            raise VdfError(f"{'/'.join(path)} is a block, not a value")
+        else:
+            self._apply([(node.value_start, node.value_end, encode(value))])
 
     def delete(self, path: Sequence[str]) -> int:
-        """Remove every node at ``path``. Returns how many were removed."""
+        """Remove ``path`` from the block Steam reads (see ``first``). Returns how many were removed.
+
+        Every copy of the key in that one block goes, since a later duplicate
+        would otherwise become the one Steam sees. Copies under another
+        spelling of a parent (``Apps`` next to ``apps``) are left alone.
+        """
         if not path:
             raise ValueError("empty path")
-        nodes = self.find_all(path)
-        ops = [self._delete_op(n) for n in nodes]
-        if ops:
-            self._apply(ops)
-        return len(ops)
+        parent = self.first(path[:-1])
+        nodes = parent.find_all(path[-1]) if parent is not None and parent.is_block else []
+        if nodes:
+            self._apply([self._delete_op(n) for n in nodes])
+        return len(nodes)
+
+    def delete_if_empty(self, path: Sequence[str]) -> int:
+        """Remove the block Steam reads at ``path`` if it has no children left.
+
+        A block with a namesake in the same parent stays: removing it would
+        make Steam read the other one instead.
+        """
+        if not path:
+            raise ValueError("empty path")
+        parent = self.first(path[:-1])
+        same = parent.find_all(path[-1]) if parent is not None and parent.is_block else []
+        if len(same) != 1 or not same[0].is_block or same[0].children:
+            return 0
+        self._apply([self._delete_op(same[0])])
+        return 1
 
     # ---- internals ----------------------------------------------------------
 

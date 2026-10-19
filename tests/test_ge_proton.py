@@ -114,3 +114,103 @@ def test_rate_limit_message():
     net = FakeNet({ge_proton.LATEST_URL: (403, {})})
     with pytest.raises(ge_proton.GEError, match="limiting"):
         ge_proton.latest_release(net)
+
+
+def test_broken_leftover_folder_is_moved_aside(tmp_path):
+    compat = tmp_path / "compatibilitytools.d"
+    (compat / TAG / "files").mkdir(parents=True)  # half-copied by hand, no compatibilitytool.vdf
+    data = build_tar()
+    net = net_for(data)
+    tool = ge_proton.install(net, ge_proton.latest_release(net), compat)
+    assert tool.internal_name == TAG
+    assert (compat / TAG / "compatibilitytool.vdf").is_file()
+    assert (compat / f".autoproton-broken-{TAG}-1" / "files").is_dir()  # kept, not deleted
+
+
+def test_download_that_stops_part_way_is_a_clear_error(monkeypatch):
+    import io
+
+    from autoproton.net import Net, NetError
+
+    class Resp:
+        headers = {"Content-Length": "100"}
+
+        def read(self, n):
+            raise TimeoutError("timed out")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    n = Net(env={})
+    monkeypatch.setattr(n, "_open", lambda url, headers: Resp())
+    monkeypatch.setattr(n, "_pace", lambda url: None)
+    with pytest.raises(NetError, match="stopped part-way"):
+        n.download("https://example.invalid/x", io.BytesIO())
+
+
+def test_cancel_while_a_download_is_stuck_says_cancelled(monkeypatch):
+    import io
+
+    from autoproton.net import Net
+
+    ev = threading.Event()
+
+    class Resp:
+        headers = {"Content-Length": "100"}
+
+        def read(self, n):
+            ev.set()  # the user presses Cancel while the read hangs, then it times out
+            raise TimeoutError("timed out")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    n = Net(env={})
+    monkeypatch.setattr(n, "_open", lambda url, headers: Resp())
+    monkeypatch.setattr(n, "_pace", lambda url: None)
+    with pytest.raises(Cancelled):
+        n.download("https://example.invalid/x", io.BytesIO(), cancel=ev)
+
+
+def test_dangling_symlink_leftover_is_moved_aside(tmp_path):
+    compat = tmp_path / "compatibilitytools.d"
+    compat.mkdir()
+    (compat / TAG).symlink_to(tmp_path / "gone")  # points at a folder that was deleted
+    data = build_tar()
+    net = net_for(data)
+    tool = ge_proton.install(net, ge_proton.latest_release(net), compat)
+    assert tool.internal_name == TAG
+    assert (compat / TAG / "compatibilitytool.vdf").is_file() and not (compat / TAG).is_symlink()
+    assert (compat / f".autoproton-broken-{TAG}-1").is_symlink()
+
+
+def test_cancel_while_the_request_gets_no_answer_says_cancelled(tmp_path):
+    from autoproton.net import NetError
+
+    ev = threading.Event()
+    data = build_tar()
+    net = net_for(data)
+
+    def stuck():
+        ev.set()  # Cancel is pressed while the server never answers; then the request times out
+        return NetError("Could not download from dl: timed out")
+
+    net.routes["https://dl/ge.tar.gz"] = stuck
+    with pytest.raises(Cancelled):
+        ge_proton.install(net, ge_proton.latest_release(net), tmp_path / "c", cancel=ev)
+    assert list((tmp_path / "c").iterdir()) == []
+
+
+def test_a_real_download_error_is_still_an_error(tmp_path):
+    from autoproton.net import NetError
+
+    net = net_for(build_tar())
+    net.routes["https://dl/ge.tar.gz"] = NetError("Could not download from dl: timed out")
+    with pytest.raises(ge_proton.GEError, match="timed out"):
+        ge_proton.install(net, ge_proton.latest_release(net), tmp_path / "c", cancel=threading.Event())

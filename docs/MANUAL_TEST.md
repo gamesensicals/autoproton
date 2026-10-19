@@ -8,8 +8,7 @@ Before you start, make a safety copy of Steam's two files (autoproton backs
 them up too, but this is independent of it):
 
 ```bash
-cp ~/.steam/steam/config/config.vdf ~/config.vdf.manual-backup
-cp ~/.steam/steam/userdata/*/config/localconfig.vdf ~/localconfig.vdf.manual-backup
+tar czf ~/steam-manual-backup.tgz ~/.steam/steam/config/config.vdf ~/.steam/steam/userdata/*/config/localconfig.vdf
 ```
 
 ## 1. Steam's internal names
