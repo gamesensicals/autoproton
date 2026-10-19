@@ -52,7 +52,8 @@ class HistoryEntry:
             account_id=str(d.get("account_id", "")), appid=d.get("appid"), game=d.get("game", ""),
             before=GameSettings.from_json(d.get("before") or {}), after=GameSettings.from_json(d.get("after") or {}),
             backup_set=d.get("backup_set"), ref=d.get("ref"), note=d.get("note", ""),
-            missing=tuple(d.get("missing") or ()),
+            # lines from before "missing" existed say "created"; every block a change created was missing
+            missing=tuple(d["missing"] if "missing" in d else d.get("created") or ()),
         )
 
 

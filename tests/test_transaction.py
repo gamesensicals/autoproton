@@ -342,6 +342,22 @@ def test_undoing_an_older_change_removes_a_mapping_block_a_newer_one_added(ctx, 
     assert steam.config.read_bytes() == original_cfg
 
 
+def test_undo_of_a_history_line_that_says_created(ctx, steam):
+    from autoproton.history import HistoryEntry
+
+    original = steam.localconfig.read_bytes()
+    store = Store(ctx)
+    entry = transaction.execute(ctx, store, plan_for(ctx, appid=1174180, after=GameSettings("-x", None)))
+    # how a development build wrote it, before the field was called "missing"
+    line = entry.to_json()
+    line["created"] = line.pop("missing")
+    assert HistoryEntry.from_json(line).missing == ("app_block",)
+    lines = store.history.path.read_text().splitlines()
+    store.history.path.write_text("\n".join(lines[:-1] + [json.dumps(line)]) + "\n")
+    undo(ctx, store, store.history.get(entry.id))
+    assert steam.localconfig.read_bytes() == original
+
+
 def _inst_acct(ctx):
     inst = locate.find_installs(ctx)[0]
     return inst, locate.accounts(inst)[0]
